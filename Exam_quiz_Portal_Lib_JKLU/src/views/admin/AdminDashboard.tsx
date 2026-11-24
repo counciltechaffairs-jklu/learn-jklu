@@ -1,0 +1,2599 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { motion } from 'framer-motion';
+import { AlertCircle, CheckCircle, XCircle, Edit2, Trash2, LogOut, BarChart3, User, Eye, Database, Activity, Book, Upload, Shield, ArrowLeft } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
+import { API } from '@/utils/api';
+import FilePreviewModal from '@/components/papers/FilePreviewModal';
+import { buildUploadUrl } from '@/utils/uploads';
+import JKLULogo from '@/components/layout/JKLULogo';
+import ThemeSwitcher from '@/components/layout/ThemeSwitcher';
+import AuthenticatedUploadPreview from './components/AuthenticatedUploadPreview';
+import ConfirmDialogModal from './components/ConfirmDialogModal';
+import type {
+  Stats,
+  Paper,
+  Course,
+  AdminUser,
+  VerificationRequest,
+  ConfirmDialogState,
+} from './types';
+
+// Helper function to construct image URL from path
+const getImageUrl = (filePath: string | undefined): string => {
+  return buildUploadUrl(filePath);
+};
+
+const AdminDashboard: React.FC = () => {
+  const { user, logout, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState('dashboard');
+
+  // Admin permission check - redirect if not admin
+  useEffect(() => {
+    if (!authLoading) {
+      if (!user) {
+        // Not logged in, redirect to admin login
+        navigate('/admin-login', { replace: true });
+      } else if (!user.is_admin) {
+        // Logged in but not admin, redirect to home
+        navigate('/home', { replace: true });
+      }
+    }
+  }, [user, authLoading, navigate]);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [pendingPapers, setPendingPapers] = useState<Paper[]>([]);
+  const [allPapers, setAllPapers] = useState<Paper[]>([]);
+  const [verificationRequests, setVerificationRequests] = useState<VerificationRequest[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [userEditModal, setUserEditModal] = useState({ isOpen: false, user: null as AdminUser | null });
+  const [userEditForm, setUserEditForm] = useState({ is_admin: false, admin_role: '' });
+  const [message, setMessage] = useState({ type: '', text: '' });
+  const [fileDiagnostics, setFileDiagnostics] = useState<any>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+
+  // Filters for all papers
+  const [paperFilters, setPaperFilters] = useState({
+    course_id: '',
+    paper_type: '',
+    year: '',
+    semester: '',
+    status: ''
+  });
+
+  // File Preview Modal State
+  const [previewModal, setPreviewModal] = useState({
+    isOpen: false,
+    fileName: '',
+    filePath: '',
+    paperId: 0
+  });
+
+  // Verification Request Modal State
+  const [verificationModal, setVerificationModal] = useState({
+    isOpen: false,
+    user: null as VerificationRequest | null
+  });
+
+  // Course form
+  const [courseForm, setCourseForm] = useState({ code: '', name: '', description: '' });
+
+  // Faculty Management state
+  const [facultyList, setFacultyList] = useState<any[]>([]);
+  const [facultyLoading, setFacultyLoading] = useState(false);
+  const [facultyForm, setFacultyForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    designation: 'Assistant Professor',
+    school: 'IET',
+    programmes: 'B.TECH',
+    batches_taught: 'B.Tech 2024-2028',
+    public_phone: '',
+    cabin_number: '',
+    office_hours: '',
+  });
+
+  // In-app confirmation modal state (replaces native browser confirm())
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmLabel: 'Confirm',
+    tone: 'danger',
+  });
+  const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
+
+  const requestConfirm = (opts: {
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    tone?: 'danger' | 'primary';
+  }): Promise<boolean> => {
+    return new Promise((resolve) => {
+      confirmResolverRef.current = resolve;
+      setConfirmDialog({
+        isOpen: true,
+        title: opts.title,
+        message: opts.message,
+        confirmLabel: opts.confirmLabel || 'Confirm',
+        tone: opts.tone || 'danger',
+      });
+    });
+  };
+
+  const resolveConfirm = (value: boolean) => {
+    setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+    confirmResolverRef.current?.(value);
+    confirmResolverRef.current = null;
+  };
+  const [editingCourse, setEditingCourse] = useState<Course | null>(null);
+
+  // Paper editing state
+  const [editPaperModal, setEditPaperModal] = useState({
+    isOpen: false,
+    paper: null as Paper | null
+  });
+  const [editPaperForm, setEditPaperForm] = useState({
+    course_id: '',
+    paper_type: '',
+    year: '',
+    semester: ''
+  });
+
+  // Rejection feedback modal state
+  const [rejectionModal, setRejectionModal] = useState({
+    isOpen: false,
+    paperId: 0,
+    feedback: ''
+  });
+
+  // Profile rejection feedback modal state
+  const [profileRejectionModal, setProfileRejectionModal] = useState({
+    isOpen: false,
+    userId: 0,
+    feedback: ''
+  });
+
+  // Upload form state
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadForm, setUploadForm] = useState({
+    course_id: '',
+    courseText: '',
+    courseName: '',
+    title: '',
+    description: '',
+    paper_type: 'assignment',
+    quiz_set: '',
+    year: new Date().getFullYear().toString(),
+    yearText: '',
+    semester: '1'
+  });
+
+  // Host creation state
+  const [hostForm, setHostForm] = useState({ email: '', name: '', password: '' });
+
+  // Maintenance Mode state
+  const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState(
+    'We are performing scheduled maintenance on Learn JKLU. The archive will be back online shortly.'
+  );
+  const [maintenanceLoading, setMaintenanceLoading] = useState(false);
+
+  const token = localStorage.getItem('token');
+
+  useEffect(() => {
+    if (token) {
+      fetchDashboardData();
+      if (user?.is_admin) {
+        API.client
+          .get('/admin/maintenance')
+          .then((res) => {
+            setMaintenanceEnabled(Boolean(res.data?.maintenance_mode));
+            if (res.data?.message) setMaintenanceMessage(String(res.data.message));
+          })
+          .catch(() => {});
+      }
+    }
+  }, [token, user?.is_admin]);
+
+  const handleToggleMaintenance = async () => {
+    const nextEnabled = !maintenanceEnabled;
+    const confirmed = await requestConfirm({
+      title: nextEnabled ? 'Enable Maintenance Mode' : 'Disable Maintenance Mode',
+      message: nextEnabled
+        ? 'Students and public visitors will be locked to the Maintenance page until you turn this off.'
+        : 'The portal will immediately become accessible to all students and visitors again.',
+      confirmLabel: nextEnabled ? 'Enable Maintenance' : 'Restore Site',
+      tone: nextEnabled ? 'danger' : 'primary',
+    });
+    if (!confirmed) return;
+
+    setMaintenanceLoading(true);
+    try {
+      const res = await API.client.post('/admin/maintenance', {
+        enabled: nextEnabled,
+        message: maintenanceMessage,
+      });
+      const enabled = Boolean(res.data?.maintenance_mode);
+      setMaintenanceEnabled(enabled);
+      if (res.data?.message) setMaintenanceMessage(String(res.data.message));
+      window.dispatchEvent(
+        new CustomEvent('maintenance-status-changed', {
+          detail: { enabled, message: res.data?.message },
+        })
+      );
+      showMessage(
+        'success',
+        enabled ? 'Maintenance Mode is now ON for all visitors.' : 'Maintenance Mode turned OFF — site is live!'
+      );
+    } catch (e: any) {
+      showMessage('error', e?.message || 'Failed to update maintenance mode');
+    } finally {
+      setMaintenanceLoading(false);
+    }
+  };
+
+  const fetchDashboardData = async () => {
+    setLoading(true);
+    try {
+      const [statsRes, papersRes, verificationRes, coursesRes] = await Promise.all([
+        API.client.get('/admin/dashboard'),
+        API.client.get('/papers/pending').catch(() => ({ data: [] })),
+        API.client.get('/admin/verification-requests').catch(() => ({ data: [] })),
+        API.client.get('/courses'),
+      ]);
+
+      setStats(statsRes.data);
+      setPendingPapers(papersRes.data);
+      setVerificationRequests(verificationRes.data);
+      setCourses(coursesRes.data);
+
+      // Fetch all papers for the all documents tab
+      fetchAllPapers();
+    } catch (err) {
+      showMessage('error', 'Failed to fetch data');
+    }
+    setLoading(false);
+  };
+
+  const fetchAllPapers = async () => {
+    try {
+      const params: any = {};
+      Object.entries(paperFilters).forEach(([key, value]) => {
+        if (value) params[key] = value;
+      });
+
+      const response = await API.client.get('/papers', { params });
+      setAllPapers(response.data);
+    } catch (err) {
+      console.error('Failed to fetch all papers:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'all-papers' && token) {
+      fetchAllPapers();
+    }
+  }, [paperFilters, activeTab, token]);
+
+  useEffect(() => {
+    if (activeTab === 'users' && token) {
+      fetchUsers();
+    }
+    if (activeTab === 'faculty') {
+      fetchFacultyList();
+    }
+  }, [activeTab, token]);
+
+  const fetchFacultyList = async () => {
+    setFacultyLoading(true);
+    try {
+      const response = await API.client.get('/faculty/directory');
+      setFacultyList(response.data?.items || []);
+    } catch {
+      showMessage('error', 'Failed to load faculty directory');
+    }
+    setFacultyLoading(false);
+  };
+
+  const handleCreateProfessor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await API.client.post('/admin/faculty/create', facultyForm);
+      showMessage('success', res.data?.message || 'Professor account created!');
+      setFacultyForm({
+        name: '',
+        email: '',
+        password: '',
+        designation: 'Assistant Professor',
+        school: 'IET',
+        programmes: 'B.TECH',
+        batches_taught: 'B.Tech 2024-2028',
+        public_phone: '',
+        cabin_number: '',
+        office_hours: '',
+      });
+      fetchFacultyList();
+      fetchUsers();
+    } catch (err: any) {
+      showMessage('error', err?.message || 'Failed to create professor account');
+    }
+  };
+
+  const fetchUsers = async () => {
+    setUsersLoading(true);
+    try {
+      const response = await API.client.get('/admin/users');
+      setUsers(response.data);
+    } catch (err) {
+      showMessage('error', 'Failed to fetch users');
+    }
+    setUsersLoading(false);
+  };
+
+  const reviewPaper = async (paperId: number, status: string, reason?: string, adminFeedback?: { message: string }) => {
+    try {
+      const payload: any = { status };
+
+      if (status === 'rejected') {
+        if (adminFeedback) {
+          payload.admin_feedback = adminFeedback;
+        } else if (reason) {
+          payload.admin_feedback = { message: reason };
+        }
+        if (reason) {
+          payload.rejection_reason = reason;
+        }
+      }
+
+      await API.client.patch(`/papers/${paperId}/review`, payload);
+      API.clearCache();
+
+      showMessage('success', `Paper ${status} successfully`);
+      setRejectionModal({ isOpen: false, paperId: 0, feedback: '' });
+      fetchDashboardData();
+      if (activeTab === 'all-papers') {
+        fetchAllPapers();
+      }
+    } catch (err) {
+      showMessage('error', 'Failed to review paper');
+    }
+  };
+
+  const handleApproveAll = async () => {
+    if (pendingPapers.length === 0) {
+      showMessage('info', 'No pending papers to approve');
+      return;
+    }
+
+    const confirmed = await requestConfirm({
+      title: 'Approve All Pending Papers',
+      message: `Are you sure you want to approve all ${pendingPapers.length} pending papers?`,
+      confirmLabel: 'Approve All',
+      tone: 'primary',
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setPendingPapers([]);
+    setLoading(true);
+
+    try {
+      const response = await API.approveAllPendingPapers();
+
+      showMessage('success', response.data.message || `Successfully approved ${response.data.approved_count} paper(s)`);
+
+      Promise.all([
+        fetchDashboardData(),
+        activeTab === 'all-papers' ? fetchAllPapers() : Promise.resolve()
+      ]).catch(() => {});
+    } catch (err: any) {
+      fetchDashboardData();
+      showMessage('error', err?.message || 'Failed to approve all papers');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRejectPaper = (paperId: number) => {
+    setRejectionModal({ isOpen: true, paperId, feedback: '' });
+  };
+
+  const submitRejection = () => {
+    if (!rejectionModal.feedback.trim()) {
+      showMessage('error', 'Please provide feedback for rejection');
+      return;
+    }
+    reviewPaper(rejectionModal.paperId, 'rejected', rejectionModal.feedback, { message: rejectionModal.feedback });
+  };
+
+  const openEditModal = (paper: Paper) => {
+    setEditPaperModal({ isOpen: true, paper });
+    setEditPaperForm({
+      course_id: paper.course_code || '',
+      paper_type: paper.paper_type,
+      year: paper.year?.toString() || '',
+      semester: String(paper.semester || '').replace(/^Sem\s*/i, '').trim()
+    });
+  };
+
+  const editPaper = async (paperId: number) => {
+    try {
+      const rawCourse = editPaperForm.course_id.trim();
+      const matchedCourse = courses.find(
+        (c) =>
+          String(c.id) === rawCourse ||
+          c.code.toUpperCase() === rawCourse.toUpperCase()
+      );
+      await API.editPaper(paperId, {
+        course_id: matchedCourse ? matchedCourse.id : undefined,
+        course_code: !matchedCourse && rawCourse ? rawCourse : undefined,
+        paper_type: editPaperForm.paper_type || undefined,
+        year: editPaperForm.year || undefined,
+        semester: editPaperForm.semester || undefined,
+      });
+
+      showMessage('success', 'Paper updated successfully');
+      setEditPaperModal({ isOpen: false, paper: null });
+      setEditPaperForm({ course_id: '', paper_type: '', year: '', semester: '' });
+      fetchDashboardData();
+      if (activeTab === 'all-papers') {
+        fetchAllPapers();
+      }
+    } catch (err: any) {
+      showMessage('error', err?.message || 'Failed to update paper');
+    }
+  };
+
+  const deletePaper = async (paperId: number) => {
+    const confirmed = await requestConfirm({
+      title: 'Delete Paper',
+      message: 'Are you sure you want to permanently delete this paper? This action cannot be undone.',
+      confirmLabel: 'Delete Paper',
+    });
+    if (!confirmed) return;
+
+    try {
+      await API.deletePaper(paperId);
+
+      showMessage('success', 'Paper deleted successfully');
+      fetchDashboardData();
+      if (activeTab === 'all-papers') {
+        fetchAllPapers();
+      }
+    } catch (err: any) {
+      showMessage('error', err?.message || 'Failed to delete paper');
+    }
+  };
+
+  const handleCourseSubmit = async () => {
+    setLoading(true);
+    try {
+      if (editingCourse) {
+        await API.updateCourse(
+          editingCourse.id,
+          courseForm.code,
+          courseForm.name,
+          courseForm.description
+        );
+      } else {
+        await API.createCourse(courseForm.code, courseForm.name, courseForm.description);
+      }
+
+      showMessage('success', editingCourse ? 'Course updated' : 'Course created');
+      setCourseForm({ code: '', name: '', description: '' });
+      setEditingCourse(null);
+      fetchDashboardData();
+    } catch (err: any) {
+      const errorMsg = err?.message || 'Failed to save course';
+      showMessage('error', errorMsg);
+    }
+    setLoading(false);
+  };
+
+  const deleteCourse = async (id: number) => {
+    const confirmed = await requestConfirm({
+      title: 'Delete Course',
+      message: 'Delete this course? All associated papers will be deleted.',
+      confirmLabel: 'Delete Course',
+    });
+    if (!confirmed) return;
+
+    try {
+      await API.deleteCourse(id);
+
+      showMessage('success', 'Course deleted');
+      fetchDashboardData();
+    } catch (err: any) {
+      showMessage('error', err?.message || 'Failed to delete course');
+    }
+  };
+
+  const handleUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedFile) {
+      showMessage('error', 'Please select a file to upload');
+      return;
+    }
+
+    if (!uploadForm.course_id && (!uploadForm.courseText || !uploadForm.courseName)) {
+      showMessage('error', 'Please select or enter both course code and name');
+      return;
+    }
+
+    if (uploadForm.paper_type === 'quiz' && !uploadForm.quiz_set) {
+      showMessage('error', 'Please select a quiz set (A to F)');
+      return;
+    }
+
+    if (!uploadForm.year && !uploadForm.yearText) {
+      showMessage('error', 'Please select or enter a year');
+      return;
+    }
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    if (uploadForm.course_id) {
+      formData.append('course_id', uploadForm.course_id);
+    } else if (uploadForm.courseText && uploadForm.courseName) {
+      formData.append('course_code', uploadForm.courseText);
+      formData.append('course_name', uploadForm.courseName);
+    }
+
+    formData.append('title', uploadForm.title);
+    formData.append('description', uploadForm.description);
+    formData.append('paper_type', uploadForm.paper_type);
+
+    if (uploadForm.paper_type === 'quiz' && uploadForm.quiz_set) {
+      formData.append('quiz_set', uploadForm.quiz_set);
+    }
+
+    const yearValue = uploadForm.year || uploadForm.yearText;
+    if (yearValue) {
+      formData.append('year', yearValue.toString());
+    }
+
+    formData.append('semester', uploadForm.semester);
+
+    try {
+      await API.uploadPaper(formData);
+
+      showMessage('success', 'Paper uploaded successfully!');
+      setSelectedFile(null);
+      setUploadForm({
+        course_id: '',
+        courseText: '',
+        courseName: '',
+        title: '',
+        description: '',
+        paper_type: 'assignment',
+        quiz_set: '',
+        year: new Date().getFullYear().toString(),
+        yearText: '',
+        semester: '1'
+      });
+
+      fetchDashboardData();
+      if (activeTab === 'all-papers') {
+        fetchAllPapers();
+      }
+    } catch (error: any) {
+      const errorMsg = error?.message || 'Upload failed. Please try again.';
+      showMessage('error', errorMsg);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const verifyUser = async (userId: number, approve: boolean, reason?: string, adminFeedback?: { message: string }) => {
+    try {
+      await API.verifyUser(userId, approve, reason, adminFeedback);
+
+      showMessage('success', `User ${approve ? 'verified' : 'rejected'} successfully`);
+      setVerificationModal({ isOpen: false, user: null });
+      setProfileRejectionModal({ isOpen: false, userId: 0, feedback: '' });
+      fetchDashboardData();
+    } catch (err: any) {
+      showMessage('error', err?.message || 'Failed to verify user');
+    }
+  };
+
+  const openUserEditModal = (userPayload: AdminUser) => {
+    setUserEditModal({ isOpen: true, user: userPayload });
+    setUserEditForm({ is_admin: userPayload.is_admin, admin_role: userPayload.admin_role || '' });
+  };
+
+  const submitUserEdit = async (userId: number) => {
+    try {
+      await API.client.put(`/admin/users/${userId}`, {
+        is_admin: userEditForm.is_admin || userEditForm.admin_role === 'full_admin',
+        admin_role: userEditForm.admin_role || null,
+      });
+      showMessage('success', 'User role updated successfully');
+      setUserEditModal({ isOpen: false, user: null });
+      fetchUsers();
+    } catch (err: any) {
+      showMessage('error', err?.message || 'Failed to update user');
+    }
+  };
+
+  const deleteUser = async (userId: number) => {
+    const confirmed = await requestConfirm({
+      title: 'Delete User',
+      message: 'Are you sure you want to permanently delete this user?',
+      confirmLabel: 'Delete User',
+    });
+    if (!confirmed) return;
+    try {
+      await API.client.delete(`/admin/users/${userId}`);
+      showMessage('success', 'User deleted successfully');
+      fetchUsers();
+    } catch (err: any) {
+      showMessage('error', err?.message || 'Failed to delete user');
+    }
+  };
+
+  const handleRejectProfile = (userId: number) => {
+    setProfileRejectionModal({ isOpen: true, userId, feedback: '' });
+  };
+
+  const submitProfileRejection = () => {
+    if (!profileRejectionModal.feedback.trim()) {
+      showMessage('error', 'Please provide feedback for rejection');
+      return;
+    }
+    verifyUser(profileRejectionModal.userId, false, profileRejectionModal.feedback, { message: profileRejectionModal.feedback });
+  };
+
+  const showMessage = (type: string, text: string) => {
+    setMessage({ type, text });
+    setTimeout(() => setMessage({ type: '', text: '' }), 3000);
+  };
+
+  const runFileDiagnostics = async () => {
+    setDiagnosticsLoading(true);
+    try {
+      const response = await API.client.get('/admin/diagnose/files');
+      setFileDiagnostics(response.data);
+      const missingCount = response.data.papers_with_missing_files;
+      if (missingCount > 0) {
+        showMessage('error', `Found ${missingCount} papers with missing files. Check diagnostics below.`);
+      } else {
+        showMessage('success', 'All files are present on the server.');
+      }
+    } catch (err: any) {
+      showMessage('error', err?.message || 'Failed to run diagnostics');
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  };
+
+  const handleCreateSubAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      await API.client.post('/admin/create-sub-admin', hostForm);
+      showMessage('success', 'Sub Admin created successfully');
+      setHostForm({ email: '', name: '', password: '' });
+    } catch (err: any) {
+      showMessage('error', err?.message || 'Failed to create sub admin');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const allowedPanelRoles = new Set(['full_admin', 'sub_admin', 'paper_admin', 'coding_ta']);
+  const hasAdminPanelAccess = Boolean(
+    user && (user.is_admin || (user.admin_role && allowedPanelRoles.has(user.admin_role)))
+  );
+
+  // Don't render if not admin staff
+  if (authLoading || !hasAdminPanelAccess) {
+    return null;
+  }
+
+  return (
+    <div className="min-h-screen relative overflow-x-hidden bg-transparent text-[#0A0A0C] dark:text-[#F5F4F0]">
+
+      {/* Main Content */}
+      <div className="relative z-10">
+        {/* Glassmorphic Header */}
+        <motion.header
+          initial={{ y: -24, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          className="sticky top-0 z-40 bg-[#FAF9F6]/90 dark:bg-[#0A0A0C]/90 backdrop-blur-md border-b border-[#E5E2DC]/80 dark:border-white/10"
+        >
+          <div className="max-w-7xl mx-auto px-4 py-3.5 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#896ABD] to-[#E04F33] flex items-center justify-center shadow-md shadow-[#896ABD]/25">
+                  <Shield className="text-white w-5 h-5" />
+                </div>
+                <div>
+                  <h1 className="text-base sm:text-xl font-bold tracking-tight">
+                    Admin Console
+                  </h1>
+                  <p className="text-xs font-mono-tabular text-[#5C5B57] dark:text-[#94938E]">
+                    Signed in as {user?.name || 'Admin'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 sm:hidden">
+                <ThemeSwitcher />
+                <JKLULogo size="sm" className="opacity-90" />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5 w-full sm:w-auto justify-between sm:justify-end">
+              <button
+                onClick={() => navigate('/home')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-white/75 dark:bg-white/5 text-xs font-mono-tabular hover:border-[#896ABD] transition-colors"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Archive</span>
+              </button>
+              <div className="hidden sm:flex items-center gap-2">
+                <ThemeSwitcher />
+                <JKLULogo size="sm" className="opacity-90" />
+              </div>
+              <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-mono-tabular">
+                <Activity className="h-3.5 w-3.5 animate-pulse" />
+                <span>LIVE</span>
+              </div>
+              <button
+                onClick={logout}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#E04F33]/15 border border-[#E04F33]/35 text-[#E04F33] hover:bg-[#E04F33]/20 text-xs font-mono-tabular transition-colors"
+              >
+                <LogOut size={15} />
+                <span>Logout</span>
+              </button>
+            </div>
+          </div>
+        </motion.header>
+
+        {/* Message */}
+        {message.text && (
+          <motion.div
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            className="max-w-7xl mx-auto px-4 mt-4"
+          >
+            <div className={`p-3.5 rounded-xl border backdrop-blur-md text-xs font-mono-tabular ${message.type === 'success'
+              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300'
+              : 'bg-[#E04F33]/15 border-[#E04F33]/40 text-[#E04F33]'
+              }`}>
+              <div className="flex items-center gap-2">
+                {message.type === 'success' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
+                <span className="font-bold uppercase">[{message.type}]</span>
+                <span>{message.text}</span>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        <div className="max-w-7xl mx-auto px-4 mt-6">
+          {/* Site Maintenance Mode Control */}
+          {user?.is_admin && (
+            <div
+              className={`mb-5 p-4 rounded-2xl backdrop-blur-md border shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-xs ${
+                maintenanceEnabled
+                  ? 'bg-[#E04F33]/10 border-[#E04F33]/40'
+                  : 'bg-white/85 dark:bg-[#111117]/90 border-[#E5E2DC] dark:border-white/10'
+              }`}
+            >
+              <div className="space-y-1 flex-1 min-w-0">
+                <div className="flex items-center gap-2 font-mono-tabular font-semibold">
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      maintenanceEnabled ? 'bg-[#E04F33] animate-pulse' : 'bg-emerald-500'
+                    }`}
+                  />
+                  <span className={maintenanceEnabled ? 'text-[#E04F33]' : 'text-emerald-600 dark:text-emerald-400'}>
+                    {maintenanceEnabled ? 'MAINTENANCE MODE ACTIVE · VISITORS LOCKED' : 'SITE STATUS · LIVE'}
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  value={maintenanceMessage}
+                  onChange={(e) => setMaintenanceMessage(e.target.value)}
+                  placeholder="Custom maintenance message for students..."
+                  className="w-full max-w-xl px-3 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/10 bg-white dark:bg-[#0A0A0C] text-[#0A0A0C] dark:text-[#F5F4F0] text-xs"
+                />
+              </div>
+              <div className="flex items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  disabled={maintenanceLoading}
+                  onClick={handleToggleMaintenance}
+                  className={`px-4 py-2 rounded-lg font-mono-tabular font-semibold transition disabled:opacity-50 ${
+                    maintenanceEnabled
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      : 'bg-[#E04F33] hover:bg-[#c94127] text-white'
+                  }`}
+                >
+                  {maintenanceLoading
+                    ? 'Updating...'
+                    : maintenanceEnabled
+                      ? 'Turn Maintenance OFF'
+                      : 'Turn Maintenance ON'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Bulk PDF Sync & Purge Bar */}
+          <div className="mb-5 p-4 rounded-2xl bg-white/85 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-white/10 shadow-sm flex flex-wrap items-center justify-between gap-4 font-mono-tabular text-xs">
+            <div className="space-y-1">
+              <div className="text-[#896ABD] dark:text-[#C4B5FD] font-semibold">
+                BULK PAPER ENGINE · EXPRESS.JS + POSTGRESQL
+              </div>
+              <div className="text-[#5C5B57] dark:text-[#94938E]">
+                Drop PDFs into <code className="text-[#0A0A0C] dark:text-white">/pastpaper</code> and click Sync, or Purge legacy PDFs before importing.
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                onClick={async () => {
+                  const confirmed = await requestConfirm({
+                    title: 'Purge Old PDFs',
+                    message: 'Purge all existing old PDFs from the database and storage?',
+                    confirmLabel: 'Purge All',
+                  });
+                  if (!confirmed) return;
+                  try {
+                    const res = await API.purgeOldPapers();
+                    showMessage('success', res.data.message || 'Old papers purged!');
+                    fetchDashboardData();
+                    fetchAllPapers();
+                  } catch (e: any) {
+                    showMessage('error', e?.message || 'Failed to purge old papers');
+                  }
+                }}
+                className="px-3 py-2 rounded-lg bg-[#E04F33]/15 border border-[#E04F33]/35 text-[#E04F33] hover:bg-[#E04F33]/20 transition"
+              >
+                1. Purge Old PDFs
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    const res = await API.syncPastPaperFolder(false);
+                    showMessage('success', res.data.message || 'Synced /pastpaper folder!');
+                    fetchDashboardData();
+                    fetchAllPapers();
+                  } catch (e: any) {
+                    showMessage('error', e?.message || 'Failed to sync /pastpaper folder');
+                  }
+                }}
+                className="px-3 py-2 rounded-lg bg-[#896ABD]/15 border border-[#896ABD]/40 text-[#6D4AFF] dark:text-[#C4B5FD] hover:bg-[#896ABD]/25 transition"
+              >
+                2. Auto-Index /pastpaper Folder
+              </button>
+              {user?.is_admin && (
+                <button
+                  onClick={async () => {
+                    try {
+                      const res = await API.client.post('/admin/graph/sync', {});
+                      showMessage('success', res.data.message || 'Synced catalog to Neo4j!');
+                    } catch (e: any) {
+                      showMessage('error', e?.message || 'Neo4j graph sync failed');
+                    }
+                  }}
+                  className="px-3 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/25 transition"
+                >
+                  3. Sync Graph (Neo4j)
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Glassmorphic Tabs */}
+          <div className="bg-white/85 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-white/10 rounded-2xl p-2 flex gap-1.5 overflow-x-auto shadow-sm custom-scrollbar">
+            {['dashboard', 'upload', 'all-papers', 'pending', 'courses', 'faculty', 'hosts', 'users'].map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`flex-none px-4 sm:px-5 py-2.5 rounded-xl font-mono-tabular font-semibold text-xs sm:text-sm transition-all whitespace-nowrap ${activeTab === tab
+                  ? 'bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] shadow-sm'
+                  : 'text-[#5C5B57] dark:text-[#94938E] hover:bg-[#896ABD]/10 hover:text-[#0A0A0C] dark:hover:text-white'
+                  }`}
+              >
+                {tab === 'dashboard' ? 'Overview' : tab === 'upload' ? 'Upload' : tab === 'all-papers' ? 'Documents' : tab === 'pending' ? 'Pending' : tab === 'courses' ? 'Courses' : tab === 'faculty' ? 'Faculty' : tab === 'hosts' ? 'Hosts' : 'Users'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="max-w-7xl mx-auto px-4 py-6">
+          {/* Dashboard Tab */}
+          {activeTab === 'dashboard' && stats && (
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3 }}
+            >
+              <h2 className="text-2xl font-bold mb-6 flex items-center tracking-tight">
+                <BarChart3 className="mr-2.5 text-[#896ABD] dark:text-[#A855F7]" size={26} />
+                System Overview
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                {[
+                  { label: 'Total Papers', value: stats.total_papers, icon: Database, color: 'from-[#896ABD] to-[#A855F7]' },
+                  { label: 'Pending Review', value: stats.pending_papers, icon: AlertCircle, color: 'from-amber-500 to-orange-500' },
+                  { label: 'Approved', value: stats.approved_papers, icon: CheckCircle, color: 'from-emerald-500 to-teal-500' },
+                  { label: 'Rejected', value: stats.rejected_papers, icon: XCircle, color: 'from-[#E04F33] to-pink-500' },
+                  { label: 'Total Courses', value: stats.total_courses, icon: Book, color: 'from-indigo-500 to-[#896ABD]' },
+                  { label: 'Total Users', value: stats.total_users, icon: User, color: 'from-cyan-500 to-blue-500' }
+                ].map((stat, index) => (
+                  <motion.div
+                    key={stat.label}
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.05 }}
+                    className="relative overflow-hidden rounded-2xl bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-white/10 p-6 shadow-sm hover:border-[#896ABD]/60 transition-all"
+                  >
+                    <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${stat.color}`} />
+                    <div className="flex items-center justify-between mb-3">
+                      <stat.icon className="h-6 w-6 text-[#896ABD] dark:text-[#C4B5FD]" />
+                      <span className="h-2 w-2 bg-emerald-500 rounded-full animate-pulse" />
+                    </div>
+                    <div className="text-xs font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#94938E] mb-1.5">
+                      {stat.label}
+                    </div>
+                    <div className={`text-3xl sm:text-4xl font-bold font-mono-tabular bg-gradient-to-r ${stat.color} bg-clip-text text-transparent`}>
+                      {stat.value}
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            </motion.div>
+          )}
+
+          {/* Inner Management Panels Container (keeps dark-surface tables/forms crisp over AeroShards) */}
+          <div className={activeTab === 'dashboard' ? 'hidden' : 'space-y-6'}>
+
+          {/* All Documents Tab */}
+          {activeTab === 'all-papers' && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+              className="space-y-8"
+            >
+              <div>
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+                  <h2 className="text-xl sm:text-2xl font-bold font-mono bg-gradient-to-r from-[#896ABD] to-[#E04F33] bg-clip-text text-transparent flex items-center gap-3">
+                    <Database className="text-[#0A0A0C] dark:text-[#F5F4F0] flex-shrink-0" size={24} />
+                    ALL_DOCUMENTS [{allPapers.length}]
+                  </h2>
+                  <motion.button
+                    onClick={runFileDiagnostics}
+                    disabled={diagnosticsLoading}
+                    className="flex items-center justify-center space-x-2 px-4 py-2 bg-yellow-500/20 border border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/30 rounded-lg font-mono transition-all disabled:opacity-50 w-full sm:w-auto"
+                    whileHover={{ scale: diagnosticsLoading ? 1 : 1.05 }}
+                    whileTap={{ scale: diagnosticsLoading ? 1 : 0.95 }}
+                  >
+                    <Activity size={18} />
+                    <span>{diagnosticsLoading ? 'CHECKING...' : 'CHECK FILES'}</span>
+                  </motion.button>
+                </div>
+
+                {/* File Diagnostics Results */}
+                {fileDiagnostics && (
+                  <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-4 mb-6">
+                    <h3 className="text-sm font-mono text-yellow-400/70 mb-3 uppercase">FILE DIAGNOSTICS</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                      <div className="bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg p-3 border border-yellow-500/20">
+                        <div className="text-xs text-yellow-400/50 font-mono uppercase mb-1">TOTAL PAPERS</div>
+                        <div className="text-2xl font-bold text-yellow-400 font-mono">{fileDiagnostics.total_papers}</div>
+                      </div>
+                      <div className="bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg p-3 border border-yellow-500/20">
+                        <div className="text-xs text-yellow-400/50 font-mono uppercase mb-1">FILES ON DISK</div>
+                        <div className="text-2xl font-bold text-yellow-400 font-mono">{fileDiagnostics.files_on_disk_count}</div>
+                      </div>
+                      <div className={`bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg p-3 border ${fileDiagnostics.papers_with_missing_files > 0 ? 'border-red-500/50' : 'border-[#E5E2DC] dark:border-[#232329]'}`}>
+                        <div className="text-xs font-mono uppercase mb-1" style={{ color: fileDiagnostics.papers_with_missing_files > 0 ? 'rgba(239, 68, 68, 0.5)' : 'rgba(34, 197, 94, 0.5)' }}>
+                          MISSING FILES
+                        </div>
+                        <div className={`text-2xl font-bold font-mono ${fileDiagnostics.papers_with_missing_files > 0 ? 'text-red-400' : 'text-[#0A0A0C] dark:text-[#F5F4F0]'}`}>
+                          {fileDiagnostics.papers_with_missing_files}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-xs text-yellow-400/50 font-mono">
+                      <span className="text-yellow-400/70">UPLOADS_DIR:</span> {fileDiagnostics.uploads_directory}
+                    </div>
+                    {fileDiagnostics.papers_with_missing_files > 0 && (
+                      <div className="mt-4 max-h-60 overflow-y-auto">
+                        <div className="text-xs text-red-400/70 font-mono uppercase mb-2">PAPERS WITH MISSING FILES:</div>
+                        {fileDiagnostics.papers.filter((p: any) => !p.file_exists).map((p: any) => (
+                          <div key={p.paper_id} className="bg-red-900/20 border border-red-500/30 rounded p-2 mb-2 text-xs font-mono">
+                            <div className="text-red-400">ID: {p.paper_id} - {p.paper_title}</div>
+                            <div className="text-red-400/70">Stored: {p.stored_path}</div>
+                            <div className="text-red-400/70">Expected: {p.extracted_filename}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Filters */}
+                <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-4 mb-6">
+                  <h3 className="text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-3 uppercase">FILTERS</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                    <select
+                      value={paperFilters.course_id}
+                      onChange={(e) => setPaperFilters({ ...paperFilters, course_id: e.target.value })}
+                      className="px-3 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none"
+                    >
+                      <option value="">All Courses</option>
+                      {courses.map(course => (
+                        <option key={course.id} value={course.id}>{course.code}</option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={paperFilters.paper_type}
+                      onChange={(e) => setPaperFilters({ ...paperFilters, paper_type: e.target.value })}
+                      className="px-3 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none"
+                    >
+                      <option value="">All Types</option>
+                      <option value="assignment">Assignment</option>
+                      <option value="quiz">Quiz</option>
+                      <option value="midterm">Midterm</option>
+                      <option value="endterm">Endterm</option>
+                      <option value="project">Project</option>
+                    </select>
+
+                    <input
+                      type="number"
+                      placeholder="Year"
+                      value={paperFilters.year}
+                      onChange={(e) => setPaperFilters({ ...paperFilters, year: e.target.value })}
+                      className="px-3 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
+                    />
+
+                    <input
+                      type="text"
+                      placeholder="Semester"
+                      value={paperFilters.semester}
+                      onChange={(e) => setPaperFilters({ ...paperFilters, semester: e.target.value })}
+                      className="px-3 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
+                    />
+
+                    <select
+                      value={paperFilters.status}
+                      onChange={(e) => setPaperFilters({ ...paperFilters, status: e.target.value })}
+                      className="px-3 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none"
+                    >
+                      <option value="">All Status</option>
+                      <option value="pending">Pending</option>
+                      <option value="approved">Approved</option>
+                      <option value="rejected">Rejected</option>
+                    </select>
+                  </div>
+                </div>
+
+                {allPapers.length === 0 ? (
+                  <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-8 text-center">
+                    <Database className="h-12 w-12 text-[#5C5B57] dark:text-[#94938E] mx-auto mb-3" />
+                    <p className="text-[#5C5B57] dark:text-[#94938E] font-mono">NO_PAPERS_FOUND</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {allPapers.map((paper, index) => (
+                      <motion.div
+                        key={paper.id}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.05 }}
+                        className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 hover:border-cyan-500/60 transition-all shadow-lg hover:shadow-cyan-500/10"
+                      >
+                        <div className="flex flex-col sm:flex-row items-start justify-between mb-4 gap-4">
+                          <div className="flex-1 w-full">
+                            <h3 className="text-lg sm:text-xl font-bold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono mb-2 break-words">{paper.title}</h3>
+                            <div className="text-xs sm:text-sm text-[#5C5B57] dark:text-[#94938E] font-mono mb-1">
+                              <span className="text-[#0A0A0C] dark:text-[#F5F4F0]">COURSE:</span> {paper.course_code} - {paper.course_name}
+                            </div>
+                            <div className="text-xs sm:text-sm text-[#5C5B57] dark:text-[#94938E] font-mono">
+                              <span className="text-[#0A0A0C] dark:text-[#F5F4F0]">UPLOADED_BY:</span> {paper.uploader_name} {paper.uploader_email && <span className="block sm:inline sm:ml-1">({paper.uploader_email})</span>}
+                            </div>
+                          </div>
+                          <div className="flex flex-row sm:flex-col gap-2 items-center sm:items-end w-full sm:w-auto">
+                            <span className={`px-2 sm:px-3 py-1 border text-[10px] sm:text-xs font-mono rounded-lg ${paper.status === 'approved' ? 'bg-[#896ABD]/15 border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0]' :
+                              paper.status === 'rejected' ? 'bg-red-500/20 border-red-500/50 text-red-400' :
+                                'bg-yellow-500/20 border-yellow-500/50 text-yellow-400'
+                              }`}>
+                              {paper.status?.toUpperCase() || 'PENDING'}
+                            </span>
+                            <span className="px-2 sm:px-3 py-1 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] text-[10px] sm:text-xs font-mono rounded-lg whitespace-nowrap">
+                              {paper.paper_type.toUpperCase()}
+                            </span>
+                          </div>
+                        </div>
+
+                        {paper.description && (
+                          <p className="text-[#0A0A0C] dark:text-[#F5F4F0]/60 mb-4 font-mono text-sm">{paper.description}</p>
+                        )}
+
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pt-4 border-t border-[#E5E2DC] dark:border-[#232329] gap-4">
+                          <div className="flex flex-col gap-1 w-full sm:w-auto">
+                            <div className="text-sm text-[#5C5B57] dark:text-[#94938E] font-mono">
+                              {paper.year && `YEAR: ${paper.year}`}
+                              {paper.semester && ` | SEMESTER: ${paper.semester}`}
+                            </div>
+                            {paper.file_path && (
+                              <div className="text-xs text-[#0A0A0C] dark:text-[#F5F4F0]/40 font-mono truncate max-w-xs sm:max-w-md">
+                                FILE: {paper.file_path}
+                              </div>
+                            )}
+                            {!paper.file_path && (
+                              <div className="text-xs text-red-400/70 font-mono">
+                                ⚠️ FILE_PATH MISSING
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-2 justify-start sm:justify-end w-full sm:w-auto">
+                            <motion.button
+                              onClick={() => {
+                                if (!paper.file_name) {
+                                  showMessage('error', 'File name is missing for this paper');
+                                  return;
+                                }
+                                setPreviewModal({
+                                  isOpen: true,
+                                  fileName: paper.file_name,
+                                  filePath: paper.file_path || '',
+                                  paperId: paper.id
+                                });
+                              }}
+                              disabled={!paper.file_name}
+                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                              whileHover={{ scale: paper.file_name ? 1.05 : 1, boxShadow: paper.file_name ? '0 0 15px rgba(6, 182, 212, 0.5)' : 'none' }}
+                              whileTap={{ scale: paper.file_name ? 0.95 : 1 }}
+                            >
+                              <Eye size={18} />
+                              <span>VIEW</span>
+                            </motion.button>
+                            <motion.button
+                              onClick={() => openEditModal(paper)}
+                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all"
+                              whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(168, 85, 247, 0.5)' }}
+                              whileTap={{ scale: 0.95 }}
+                            >
+                              <Edit2 size={18} />
+                              <span>EDIT</span>
+                            </motion.button>
+                            {paper.status !== 'approved' && (
+                              <motion.button
+                                onClick={() => reviewPaper(paper.id, 'approved')}
+                                className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all"
+                                whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(34, 197, 94, 0.5)' }}
+                                whileTap={{ scale: 0.95 }}
+                              >
+                                <CheckCircle size={18} />
+                                <span>APPROVE</span>
+                              </motion.button>
+                            )}
+                            {paper.status !== 'rejected' && (
+                              <motion.button
+                                onClick={() => handleRejectPaper(paper.id)}
+                                className="flex items-center space-x-2 px-4 py-2 bg-red-500/20 border border-red-500/50 text-red-400 hover:bg-red-500/30 rounded-lg font-mono transition-all"
+                                whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(239, 68, 68, 0.5)' }}
+                                whileTap={{ scale: 0.95 }}
+                              >
+                                <XCircle size={18} />
+                                <span>REJECT</span>
+                              </motion.button>
+                            )}
+                            <motion.button
+                              onClick={() => deletePaper(paper.id)}
+                              className="flex items-center space-x-2 px-4 py-2 bg-red-900/40 border border-red-500/70 text-red-200 hover:bg-red-800/60 rounded-lg font-mono transition-all"
+                              whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(239, 68, 68, 0.8)' }}
+                              whileTap={{ scale: 0.95 }}
+                            >
+                              <Trash2 size={18} />
+                              <span>DELETE</span>
+                            </motion.button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {/* Pending Review Tab - ID Verification Requests & Papers */}
+          {activeTab === 'pending' && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+              className="space-y-8"
+            >
+              {/* ID Verification Requests Section */}
+              <div>
+                <h2 className="text-xl sm:text-2xl font-bold mb-4 font-mono bg-gradient-to-r from-yellow-400 to-orange-400 bg-clip-text text-transparent flex items-center gap-3">
+                  <User className="text-yellow-400 flex-shrink-0" size={24} />
+                  ID_VERIFICATION_REQUESTS [{verificationRequests.length}]
+                </h2>
+                {verificationRequests.length === 0 ? (
+                  <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-8 text-center">
+                    <User className="h-12 w-12 text-yellow-400/50 mx-auto mb-3" />
+                    <p className="text-yellow-400/70 font-mono">NO_PENDING_VERIFICATION_REQUESTS</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {verificationRequests.map((request, index) => (
+                      <motion.div
+                        key={request.id}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.1 }}
+                        className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 hover:border-yellow-500/60 transition-all shadow-lg hover:shadow-yellow-500/10"
+                      >
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex-1 w-full">
+                            <h3 className="text-lg sm:text-xl font-bold text-yellow-400 font-mono mb-2 break-words">{request.name}</h3>
+                            <div className="text-xs sm:text-sm text-yellow-400/70 font-mono mb-1 truncate">
+                              <span className="text-[#0A0A0C] dark:text-[#F5F4F0]">EMAIL:</span> {request.email}
+                            </div>
+                            {(request.university || request.department || request.roll_no) && (
+                              <div className="text-xs sm:text-sm text-yellow-400/50 font-mono space-y-1 sm:space-y-0 sm:space-x-2">
+                                {request.university && <p className="inline-block"><span className="text-[#0A0A0C] dark:text-[#F5F4F0]">UNI:</span> {request.university}</p>}
+                                {request.department && <p className="inline-block"><span className="text-[#0A0A0C] dark:text-[#F5F4F0]">DEPT:</span> {request.department}</p>}
+                                {request.roll_no && <p className="inline-block"><span className="text-[#0A0A0C] dark:text-[#F5F4F0]">ROLL:</span> {request.roll_no}</p>}
+                              </div>
+                            )}
+                          </div>
+                          <div className="mt-2 sm:mt-0">
+                            <span className="px-2 sm:px-4 py-1 sm:py-2 bg-yellow-500/20 border border-yellow-500/50 text-yellow-400 text-[10px] sm:text-xs font-mono rounded-lg whitespace-nowrap">
+                              PENDING
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-end pt-4 border-t border-yellow-500/20">
+                          <motion.button
+                            onClick={() => setVerificationModal({ isOpen: true, user: request })}
+                            className="flex items-center space-x-2 px-6 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all"
+                            whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(6, 182, 212, 0.5)' }}
+                            whileTap={{ scale: 0.95 }}
+                          >
+                            <Eye size={18} />
+                            <span>REVIEW_REQUEST</span>
+                          </motion.button>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Pending Papers Section */}
+              <div>
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-4 gap-4">
+                  <h2 className="text-xl sm:text-2xl font-bold font-mono bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent flex items-center gap-3">
+                    <Database className="text-[#0A0A0C] dark:text-[#F5F4F0] flex-shrink-0" size={24} />
+                    PENDING_PAPERS [{pendingPapers.length}]
+                  </h2>
+                  {pendingPapers.length > 0 && (
+                    <motion.button
+                      onClick={handleApproveAll}
+                      disabled={loading}
+                      className="flex items-center justify-center space-x-2 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-black font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all disabled:opacity-50 w-full sm:w-auto"
+                      whileHover={{ scale: loading ? 1 : 1.05, boxShadow: loading ? 'none' : '0 0 20px rgba(34, 197, 94, 0.5)' }}
+                      whileTap={{ scale: loading ? 1 : 0.95 }}
+                    >
+                      <CheckCircle size={18} />
+                      <span className="text-sm">APPROVE ALL</span>
+                    </motion.button>
+                  )}
+                </div>
+                {pendingPapers.length === 0 ? (
+                  <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-8 text-center">
+                    <Database className="h-12 w-12 text-[#5C5B57] dark:text-[#94938E] mx-auto mb-3" />
+                    <p className="text-[#5C5B57] dark:text-[#94938E] font-mono">NO_PENDING_PAPERS</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {pendingPapers.map((paper, index) => (
+                      <motion.div
+                        key={paper.id}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.1 }}
+                        className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 hover:border-blue-500/60 transition-all shadow-lg hover:shadow-blue-500/10"
+                      >
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex-1">
+                            <h3 className="text-xl font-bold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono mb-2">{paper.title}</h3>
+                            <div className="text-sm text-[#5C5B57] dark:text-[#94938E] font-mono mb-1">
+                              <span className="text-[#0A0A0C] dark:text-[#F5F4F0]">COURSE:</span> {paper.course_code} - {paper.course_name}
+                            </div>
+                            <div className="text-sm text-[#5C5B57] dark:text-[#94938E] font-mono">
+                              <span className="text-[#0A0A0C] dark:text-[#F5F4F0]">UPLOADED_BY:</span> {paper.uploader_name} ({paper.uploader_email})
+                            </div>
+                          </div>
+                          <span className="px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] text-sm font-mono rounded-lg">
+                            {paper.paper_type.toUpperCase()}
+                          </span>
+                        </div>
+
+                        {paper.description && (
+                          <p className="text-[#0A0A0C] dark:text-[#F5F4F0]/60 mb-4 font-mono text-sm">{paper.description}</p>
+                        )}
+
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pt-4 border-t border-[#E5E2DC] dark:border-[#232329] gap-4">
+                          <div className="flex flex-col gap-1 w-full sm:w-auto">
+                            <div className="text-sm text-[#5C5B57] dark:text-[#94938E] font-mono">
+                              {paper.year && `YEAR: ${paper.year}`}
+                              {paper.semester && ` | SEMESTER: ${paper.semester}`}
+                            </div>
+                            {paper.file_path && (
+                              <div className="text-xs text-[#0A0A0C] dark:text-[#F5F4F0]/40 font-mono truncate max-w-xs sm:max-w-md">
+                                FILE: {paper.file_path}
+                              </div>
+                            )}
+                            {!paper.file_path && (
+                              <div className="text-xs text-red-400/70 font-mono">
+                                ⚠️ FILE_PATH MISSING
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-2 justify-start sm:justify-end w-full sm:w-auto">
+                            <motion.button
+                              onClick={() => {
+                                if (!paper.file_name) {
+                                  showMessage('error', 'File name is missing for this paper');
+                                  return;
+                                }
+                                setPreviewModal({
+                                  isOpen: true,
+                                  fileName: paper.file_name,
+                                  filePath: paper.file_path || '',
+                                  paperId: paper.id
+                                });
+                              }}
+                              disabled={!paper.file_name}
+                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                              whileHover={{ scale: paper.file_name ? 1.05 : 1, boxShadow: paper.file_name ? '0 0 15px rgba(6, 182, 212, 0.5)' : 'none' }}
+                              whileTap={{ scale: paper.file_name ? 0.95 : 1 }}
+                            >
+                              <Eye size={18} />
+                              <span>VIEW</span>
+                            </motion.button>
+                            <motion.button
+                              onClick={() => openEditModal(paper)}
+                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all"
+                              whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(168, 85, 247, 0.5)' }}
+                              whileTap={{ scale: 0.95 }}
+                            >
+                              <Edit2 size={18} />
+                              <span>EDIT</span>
+                            </motion.button>
+                            <motion.button
+                              onClick={() => reviewPaper(paper.id, 'approved')}
+                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all"
+                              whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(34, 197, 94, 0.5)' }}
+                              whileTap={{ scale: 0.95 }}
+                            >
+                              <CheckCircle size={18} />
+                              <span>APPROVE</span>
+                            </motion.button>
+                            <motion.button
+                              onClick={() => {
+                                handleRejectPaper(paper.id);
+                              }}
+                              className="flex items-center space-x-2 px-4 py-2 bg-red-500/20 border border-red-500/50 text-red-400 hover:bg-red-500/30 rounded-lg font-mono transition-all"
+                              whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(239, 68, 68, 0.5)' }}
+                              whileTap={{ scale: 0.95 }}
+                            >
+                              <XCircle size={18} />
+                              <span>REJECT</span>
+                            </motion.button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {/* Upload Paper Tab */}
+          {activeTab === 'upload' && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+            >
+              <h2 className="text-3xl font-bold mb-6 font-mono bg-gradient-to-r from-[#896ABD] to-[#E04F33] bg-clip-text text-transparent flex items-center gap-3">
+                <Upload className="text-[#0A0A0C] dark:text-[#F5F4F0]" size={32} />
+                UPLOAD_PAPER
+              </h2>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+                className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 shadow-lg"
+              >
+                <form onSubmit={handleUpload} className="space-y-6">
+                  {/* Course Selection */}
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      COURSE
+                    </label>
+                    <div className="space-y-2">
+                      <select
+                        value={uploadForm.course_id}
+                        onChange={(e) => setUploadForm(prev => ({ ...prev, course_id: e.target.value, courseText: '', courseName: '' }))}
+                        className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                      >
+                        <option value="">Select from existing courses</option>
+                        {courses.map(course => (
+                          <option key={course.id} value={course.id}>
+                            {course.code} - {course.name}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="text-center text-xs text-[#5C5B57] dark:text-[#94938E] font-mono">OR</div>
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          value={uploadForm.courseText}
+                          onChange={(e) => setUploadForm(prev => ({ ...prev, courseText: e.target.value, course_id: '' }))}
+                          placeholder="Course Code (e.g., CS1109)"
+                          className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
+                        />
+                        <input
+                          type="text"
+                          value={uploadForm.courseName}
+                          onChange={(e) => setUploadForm(prev => ({ ...prev, courseName: e.target.value, course_id: '' }))}
+                          placeholder="Course Name (e.g., Python)"
+                          className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-[#5C5B57] dark:text-[#94938E] font-mono mt-2">
+                      {uploadForm.course_id
+                        ? `Selected: ${courses.find(c => c.id === parseInt(uploadForm.course_id))?.code} - ${courses.find(c => c.id === parseInt(uploadForm.course_id))?.name}`
+                        : (uploadForm.courseText && uploadForm.courseName)
+                          ? `New: ${uploadForm.courseText} - ${uploadForm.courseName}`
+                          : 'Choose one option'}
+                    </p>
+                  </div>
+
+                  {/* Title */}
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      TITLE <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={uploadForm.title}
+                      onChange={(e) => setUploadForm(prev => ({ ...prev, title: e.target.value }))}
+                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
+                      placeholder="Paper title"
+                      required
+                    />
+                  </div>
+
+                  {/* Description */}
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      DESCRIPTION
+                    </label>
+                    <textarea
+                      value={uploadForm.description}
+                      onChange={(e) => setUploadForm(prev => ({ ...prev, description: e.target.value }))}
+                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60 resize-none"
+                      rows={3}
+                      placeholder="Optional description"
+                    />
+                  </div>
+
+                  {/* Paper Type and Year */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                        PAPER_TYPE <span className="text-red-400">*</span>
+                      </label>
+                      <select
+                        value={uploadForm.paper_type}
+                        onChange={(e) => setUploadForm(prev => ({ ...prev, paper_type: e.target.value, quiz_set: '' }))}
+                        className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                      >
+                        <option value="assignment">Assignment</option>
+                        <option value="quiz">Quiz</option>
+                        <option value="midterm">Midterm</option>
+                        <option value="endterm">Endterm</option>
+                        <option value="project">Project</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                        YEAR <span className="text-red-400">*</span>
+                      </label>
+                      <div className="space-y-1">
+                        <select
+                          value={uploadForm.year}
+                          onChange={(e) => setUploadForm(prev => ({ ...prev, year: e.target.value, yearText: '' }))}
+                          className="w-full px-3 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                        >
+                          <option value="">Select year</option>
+                          <option value="2026">2026</option>
+                          <option value="2025">2025</option>
+                          <option value="2024">2024</option>
+                          <option value="2023">2023</option>
+                          <option value="2022">2022</option>
+                          <option value="2021">2021</option>
+                          <option value="2020">2020</option>
+                        </select>
+                        <input
+                          type="number"
+                          value={uploadForm.yearText}
+                          onChange={(e) => setUploadForm(prev => ({ ...prev, yearText: e.target.value, year: '' }))}
+                          placeholder="Or type year"
+                          className="w-full px-3 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
+                          min="2020"
+                          max="2030"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quiz Set (if quiz type) */}
+                  {uploadForm.paper_type === 'quiz' && (
+                    <div>
+                      <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                        QUIZ_SET <span className="text-red-400">*</span>
+                      </label>
+                      <select
+                        value={uploadForm.quiz_set}
+                        onChange={(e) => setUploadForm(prev => ({ ...prev, quiz_set: e.target.value }))}
+                        className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                        required
+                      >
+                        <option value="">Select Set</option>
+                        <option value="A">Set A</option>
+                        <option value="B">Set B</option>
+                        <option value="C">Set C</option>
+                        <option value="D">Set D</option>
+                        <option value="E">Set E</option>
+                        <option value="F">Set F</option>
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Semester */}
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      SEMESTER <span className="text-red-400">*</span>
+                    </label>
+                    <select
+                      value={uploadForm.semester}
+                      onChange={(e) => setUploadForm(prev => ({ ...prev, semester: e.target.value }))}
+                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                      required
+                    >
+                      <option value="1">Semester 1</option>
+                      <option value="2">Semester 2</option>
+                      <option value="3">Semester 3</option>
+                      <option value="4">Semester 4</option>
+                      <option value="5">Semester 5</option>
+                      <option value="6">Semester 6</option>
+                      <option value="7">Semester 7</option>
+                      <option value="8">Semester 8</option>
+                    </select>
+                  </div>
+
+                  {/* File Upload */}
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      FILE <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="file"
+                      onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-[#896ABD]/15 file:text-[#0A0A0C] dark:text-[#F5F4F0] hover:file:bg-green-500/30 cursor-pointer"
+                      accept=".pdf,application/pdf"
+                      required
+                    />
+                    {selectedFile && (
+                      <p className="text-xs text-[#5C5B57] dark:text-[#94938E] font-mono mt-2">
+                        Selected: {selectedFile.name}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Submit Button */}
+                  <motion.button
+                    type="submit"
+                    disabled={uploading || !selectedFile}
+                    className="w-full bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono py-3 px-4 rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                    whileHover={{ scale: uploading || !selectedFile ? 1 : 1.02 }}
+                    whileTap={{ scale: uploading || !selectedFile ? 1 : 0.98 }}
+                  >
+                    {uploading ? (
+                      <>
+                        <motion.div
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                          className="w-5 h-5 border-2 border-black border-t-transparent rounded-full"
+                        />
+                        <span>UPLOADING...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="h-5 w-5" />
+                        <span>UPLOAD_PAPER</span>
+                      </>
+                    )}
+                  </motion.button>
+                </form>
+              </motion.div>
+            </motion.div>
+          )}
+
+          {/* Courses Tab */}
+          {activeTab === 'courses' && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+            >
+              <h2 className="text-3xl font-bold mb-6 font-mono bg-gradient-to-r from-[#896ABD] to-[#E04F33] bg-clip-text text-transparent">
+                COURSE_MANAGEMENT
+              </h2>
+
+              {/* Course Form */}
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+                className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 mb-6 shadow-lg"
+              >
+                <h3 className="text-xl font-bold mb-4 text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">
+                  {editingCourse ? 'EDIT_COURSE' : 'ADD_NEW_COURSE'}
+                </h3>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                        COURSE_CODE
+                      </label>
+                      <input
+                        type="text"
+                        value={courseForm.code}
+                        onChange={(e) => setCourseForm({ ...courseForm, code: e.target.value })}
+                        className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                        placeholder="CS1108"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                        COURSE_NAME
+                      </label>
+                      <input
+                        type="text"
+                        value={courseForm.name}
+                        onChange={(e) => setCourseForm({ ...courseForm, name: e.target.value })}
+                        className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                        placeholder="Python Programming"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      DESCRIPTION
+                    </label>
+                    <textarea
+                      value={courseForm.description}
+                      onChange={(e) => setCourseForm({ ...courseForm, description: e.target.value })}
+                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                      rows={2}
+                      placeholder="Optional description"
+                    />
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2 sm:gap-4 mt-4">
+                    <motion.button
+                      onClick={handleCourseSubmit}
+                      disabled={loading || !courseForm.code || !courseForm.name}
+                      className="w-full sm:w-auto px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all"
+                      whileHover={{ scale: loading || !courseForm.code || !courseForm.name ? 1 : 1.02 }}
+                      whileTap={{ scale: loading || !courseForm.code || !courseForm.name ? 1 : 0.98 }}
+                    >
+                      {editingCourse ? 'UPDATE' : 'CREATE'} COURSE
+                    </motion.button>
+                    {editingCourse && (
+                      <motion.button
+                        onClick={() => {
+                          setEditingCourse(null);
+                          setCourseForm({ code: '', name: '', description: '' });
+                        }}
+                        className="w-full sm:w-auto px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-all"
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                      >
+                        CANCEL
+                      </motion.button>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+
+              {/* Courses List */}
+              <div className="space-y-3">
+                {courses.map((course, index) => (
+                  <motion.div
+                    key={course.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.1 }}
+                    className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 hover:border-green-500/60 transition-all"
+                  >
+                    <div className="w-full sm:w-auto">
+                      <div className="font-bold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-lg break-words">
+                        {course.code} - {course.name}
+                      </div>
+                      {course.description && (
+                        <div className="text-sm text-[#5C5B57] dark:text-[#94938E] font-mono mt-1 break-words">
+                          {course.description}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex space-x-2 w-full sm:w-auto justify-end">
+                      <motion.button
+                        onClick={() => {
+                          setEditingCourse(course);
+                          setCourseForm({
+                            code: course.code,
+                            name: course.name,
+                            description: course.description || ''
+                          });
+                        }}
+                        className="p-2 text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] rounded-lg transition-all font-mono"
+                        whileHover={{ scale: 1.1, boxShadow: '0 0 10px rgba(168, 85, 247, 0.5)' }}
+                        whileTap={{ scale: 0.9 }}
+                      >
+                        <Edit2 size={18} />
+                      </motion.button>
+                      <motion.button
+                        onClick={() => deleteCourse(course.id)}
+                        className="p-2 text-red-400 hover:bg-red-500/20 border border-red-500/30 rounded-lg transition-all font-mono"
+                        whileHover={{ scale: 1.1, boxShadow: '0 0 10px rgba(239, 68, 68, 0.5)' }}
+                        whileTap={{ scale: 0.9 }}
+                      >
+                        <Trash2 size={18} />
+                      </motion.button>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            </motion.div>
+
+          )}
+
+          {/* Hosts Tab */}
+          {activeTab === 'hosts' && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+            >
+              <h2 className="text-3xl font-bold mb-6 font-mono bg-gradient-to-r from-[#896ABD] to-[#E04F33] bg-clip-text text-transparent flex items-center gap-3">
+                <User className="text-[#0A0A0C] dark:text-[#F5F4F0]" size={32} />
+                HOST_MANAGEMENT
+              </h2>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+                className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 shadow-lg"
+              >
+                <div className="mb-6 border-b border-[#E5E2DC] dark:border-[#232329] pb-4">
+                  <h3 className="text-xl font-bold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono mb-2">CREATE_NEW_HOST</h3>
+                  <p className="text-[#5C5B57] dark:text-[#94938E] font-mono text-sm">
+                    Hosts (Sub-Admins) can create and manage weekly coding challenges but cannot access full system administration.
+                  </p>
+                </div>
+
+                <form onSubmit={handleCreateSubAdmin} className="space-y-6 max-w-2xl">
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      EMAIL_ADDRESS <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      value={hostForm.email}
+                      onChange={(e) => setHostForm({ ...hostForm, email: e.target.value })}
+                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
+                      placeholder="host@jklu.edu.in"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      FULL_NAME <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={hostForm.name}
+                      onChange={(e) => setHostForm({ ...hostForm, name: e.target.value })}
+                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
+                      placeholder="John Doe"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      PASSWORD <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={hostForm.password}
+                      onChange={(e) => setHostForm({ ...hostForm, password: e.target.value })}
+                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
+                      placeholder="Min 6 characters"
+                      required
+                      minLength={6}
+                    />
+                  </div>
+
+                  <motion.button
+                    type="submit"
+                    disabled={loading || !hostForm.email || !hostForm.name || !hostForm.password}
+                    className="w-full bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono py-3 px-4 rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                    whileHover={{ scale: loading ? 1 : 1.02 }}
+                    whileTap={{ scale: loading ? 1 : 0.98 }}
+                  >
+                    {loading ? (
+                      <>
+                        <motion.div
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                          className="w-5 h-5 border-2 border-black border-t-transparent rounded-full"
+                        />
+                        <span>CREATING...</span>
+                      </>
+                    ) : (
+                      <>
+                        <User className="h-5 w-5" />
+                        <span>CREATE_HOST</span>
+                      </>
+                    )}
+                  </motion.button>
+                </form>
+              </motion.div>
+            </motion.div>
+          )}
+
+          {/* Users Tab */}
+          {activeTab === 'users' && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+            >
+              <h2 className="text-3xl font-bold mb-6 font-mono bg-gradient-to-r from-[#896ABD] to-[#E04F33] bg-clip-text text-transparent flex items-center gap-3">
+                <User className="text-[#0A0A0C] dark:text-[#F5F4F0]" size={32} />
+                USER_MANAGEMENT
+              </h2>
+
+              <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 shadow-lg overflow-x-auto min-h-[400px]">
+                {usersLoading ? (
+                  <div className="flex justify-center p-8">
+                    <motion.div
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                      className="w-10 h-10 border-4 border-black border-t-green-500 rounded-full"
+                    />
+                  </div>
+                ) : (
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b-2 border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm uppercase">
+                        <th className="p-4">Name</th>
+                        <th className="p-4">Email</th>
+                        <th className="p-4">Admin Status</th>
+                        <th className="p-4">Admin Role</th>
+                        <th className="p-4">Joined</th>
+                        <th className="p-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-green-500/10 text-[#0A0A0C] dark:text-[#F5F4F0]/80 font-mono">
+                      {users.map((u) => (
+                        <motion.tr
+                          key={u.id}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="hover:bg-green-500/5 transition-colors"
+                        >
+                          <td className="p-4 whitespace-nowrap">{u.name}</td>
+                          <td className="p-4 whitespace-nowrap">{u.email}</td>
+                          <td className="p-4">
+                            {u.is_admin ? (
+                              <span className="px-2 py-1 bg-[#896ABD]/15 text-[#0A0A0C] dark:text-[#F5F4F0] rounded border border-[#E5E2DC] dark:border-[#232329] text-xs">TRUE</span>
+                            ) : (
+                              <span className="px-2 py-1 bg-gray-500/20 text-[#5C5B57] dark:text-[#94938E] rounded border border-gray-500/30 text-xs">FALSE</span>
+                            )}
+                          </td>
+                          <td className="p-4">
+                            {u.admin_role ? <span className="text-[#0A0A0C] dark:text-[#F5F4F0]">{u.admin_role}</span> : <span className="text-gray-500">-</span>}
+                          </td>
+                          <td className="p-4 whitespace-nowrap text-sm">
+                            {new Date(u.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="p-4 text-right">
+                            <div className="flex justify-end space-x-2">
+                              <button
+                                onClick={() => openUserEditModal(u)}
+                                className="p-2 text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/15 border border-transparent hover:border-[#E5E2DC] dark:border-[#232329] rounded transition-all"
+                                title="Edit Role"
+                              >
+                                <Edit2 size={16} />
+                              </button>
+                              <button
+                                onClick={() => deleteUser(u.id)}
+                                className="p-2 text-red-400 hover:bg-red-500/20 border border-transparent hover:border-red-500/30 rounded transition-all"
+                                title="Delete User"
+                                disabled={u.id === user?.id}
+                              >
+                                <Trash2 size={16} className={u.id === user?.id ? 'opacity-50' : ''} />
+                              </button>
+                            </div>
+                          </td>
+                        </motion.tr>
+                      ))}
+                      {users.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="p-8 text-center text-gray-500">No users found</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {/* Faculty Accounts Management Tab */}
+          {activeTab === 'faculty' && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-6"
+            >
+              <div className="bg-white/90 dark:bg-[#111117]/90 border border-[#E5E2DC] dark:border-white/10 rounded-2xl p-6 shadow-sm space-y-4">
+                <div>
+                  <h2 className="text-lg font-bold">Create / Assign Professor Account</h2>
+                  <p className="text-xs text-[#5C5B57] dark:text-[#94938E]">
+                    Promotes an existing user or creates a new faculty account with public academic metadata and batch categorization.
+                  </p>
+                </div>
+                <form onSubmit={handleCreateProfessor} className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  <input
+                    type="text"
+                    required
+                    placeholder="Full Name (e.g. Dr. Aditi Rao) *"
+                    value={facultyForm.name}
+                    onChange={(e) => setFacultyForm({ ...facultyForm, name: e.target.value })}
+                    className="px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C]"
+                  />
+                  <input
+                    type="email"
+                    required
+                    placeholder="Official Email (@jklu.edu.in) *"
+                    value={facultyForm.email}
+                    onChange={(e) => setFacultyForm({ ...facultyForm, email: e.target.value })}
+                    className="px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C]"
+                  />
+                  <input
+                    type="password"
+                    placeholder="Initial Password (min 6 chars)"
+                    value={facultyForm.password}
+                    onChange={(e) => setFacultyForm({ ...facultyForm, password: e.target.value })}
+                    className="px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C]"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Designation"
+                    value={facultyForm.designation}
+                    onChange={(e) => setFacultyForm({ ...facultyForm, designation: e.target.value })}
+                    className="px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C]"
+                  />
+                  <select
+                    value={facultyForm.school}
+                    onChange={(e) => setFacultyForm({ ...facultyForm, school: e.target.value })}
+                    className="px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C]"
+                  >
+                    <option value="IET">IET (Engineering &amp; Tech)</option>
+                    <option value="IM">IM (Management)</option>
+                    <option value="ID">ID (Design)</option>
+                  </select>
+                  <input
+                    type="text"
+                    placeholder="Programmes (B.TECH, BCA)"
+                    value={facultyForm.programmes}
+                    onChange={(e) => setFacultyForm({ ...facultyForm, programmes: e.target.value })}
+                    className="px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C]"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Batches (B.Tech 2024-2028)"
+                    value={facultyForm.batches_taught}
+                    onChange={(e) => setFacultyForm({ ...facultyForm, batches_taught: e.target.value })}
+                    className="px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C]"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Public Phone"
+                    value={facultyForm.public_phone}
+                    onChange={(e) => setFacultyForm({ ...facultyForm, public_phone: e.target.value })}
+                    className="px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C]"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Cabin & Office Hours"
+                    value={facultyForm.cabin_number}
+                    onChange={(e) => setFacultyForm({ ...facultyForm, cabin_number: e.target.value })}
+                    className="px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C]"
+                  />
+                  <div className="sm:col-span-3 flex justify-end">
+                    <button
+                      type="submit"
+                      className="px-5 py-2.5 rounded-xl bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] font-semibold hover:bg-[#E04F33] dark:hover:bg-[#E04F33] dark:hover:text-white transition-colors"
+                    >
+                      Save / Assign Professor Account
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <div className="bg-white/90 dark:bg-[#111117]/90 border border-[#E5E2DC] dark:border-white/10 rounded-2xl p-6 shadow-sm space-y-3">
+                <h3 className="text-base font-bold">Active Faculty Accounts ({facultyList.length})</h3>
+                {facultyLoading ? (
+                  <p className="text-xs text-[#5C5B57]">Loading faculty profiles...</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                    {facultyList.map((f) => (
+                      <div key={f.user_id} className="p-3.5 rounded-xl border border-[#E5E2DC] dark:border-white/10 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="font-bold">{f.name}</div>
+                          <div className="text-[#5C5B57] dark:text-[#94938E]">{f.designation} · {f.school}</div>
+                          <div className="font-mono-tabular text-[11px] mt-0.5">{f.public_email}</div>
+                        </div>
+                        <span className="px-2 py-0.5 rounded font-mono-tabular text-[10px] border border-[#E5E2DC] dark:border-white/15">
+                          {(f.programmes || []).join(', ')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+          </div>
+
+        </div>
+
+        {/* User Edit Modal */}
+        {userEditModal.isOpen && userEditModal.user && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+            onClick={() => setUserEditModal({ isOpen: false, user: null })}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] shadow-2xl rounded-xl p-6 max-w-md w-full mx-4"
+            >
+              <h3 className="text-xl font-bold text-[#0A0A0C] dark:text-[#F5F4F0] mb-6 font-mono">EDIT_USER: {userEditModal.user.name}</h3>
+
+              <div className="space-y-6 font-mono">
+                <div className="flex items-center space-x-3 p-4 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg">
+                  <input
+                    type="checkbox"
+                    id="isAdminCheck"
+                    checked={userEditForm.is_admin}
+                    onChange={(e) => setUserEditForm({ ...userEditForm, is_admin: e.target.checked })}
+                    className="w-5 h-5 accent-[#896ABD]"
+                    disabled={userEditModal.user.id === user?.id}
+                  />
+                  <div className="flex flex-col">
+                    <label htmlFor="isAdminCheck" className="text-sm font-bold text-[#0A0A0C] dark:text-[#F5F4F0] uppercase cursor-pointer">
+                      IS_ADMIN
+                    </label>
+                    <span className="text-xs text-[#5C5B57] dark:text-[#94938E]">Grants administrative access</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-[#0A0A0C] dark:text-[#F5F4F0] mb-2 uppercase">
+                    ADMIN_ROLE
+                  </label>
+                  <select
+                    value={userEditForm.admin_role}
+                    onChange={(e) => {
+                      const nextRole = e.target.value;
+                      setUserEditForm({
+                        admin_role: nextRole,
+                        is_admin: nextRole === 'full_admin',
+                      });
+                    }}
+                    className="w-full px-4 py-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 uppercase appearance-none"
+                    disabled={userEditModal.user.id === user?.id}
+                  >
+                    <option value="">NONE (Student / Basic User)</option>
+                    <option value="professor">PROFESSOR (Faculty)</option>
+                    <option value="coding_ta">CODING_TA</option>
+                    <option value="paper_admin">PAPER_ADMIN</option>
+                    <option value="sub_admin">SUB_ADMIN</option>
+                    <option value="full_admin">FULL_ADMIN</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex space-x-4 justify-end mt-8">
+                <motion.button
+                  onClick={() => setUserEditModal({ isOpen: false, user: null })}
+                  className="px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-all"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  CANCEL
+                </motion.button>
+                <motion.button
+                  onClick={() => submitUserEdit(userEditModal.user!.id)}
+                  disabled={userEditModal.user.id === user?.id}
+                  className="px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  whileHover={{ scale: userEditModal.user.id === user?.id ? 1 : 1.02 }}
+                  whileTap={{ scale: userEditModal.user.id === user?.id ? 1 : 0.98 }}
+                >
+                  SAVE_CHANGES
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {/* File Preview Modal */}
+        <FilePreviewModal
+          isOpen={previewModal.isOpen}
+          onClose={() => setPreviewModal({ ...previewModal, isOpen: false })}
+          fileName={previewModal.fileName}
+          filePath={previewModal.filePath}
+          paperId={previewModal.paperId}
+          token={token || ''}
+        />
+
+        {/* Verification Request Modal */}
+        {verificationModal.isOpen && verificationModal.user && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto"
+            onClick={() => setVerificationModal({ isOpen: false, user: null })}
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] rounded-2xl shadow-2xl p-5 sm:p-6 max-w-4xl w-full my-8 text-[#0A0A0C] dark:text-[#F5F4F0]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-lg sm:text-xl font-bold tracking-tight">
+                  Verification Request: {verificationModal.user.name}
+                </h2>
+                <motion.button
+                  onClick={() => setVerificationModal({ isOpen: false, user: null })}
+                  className="text-[#5C5B57] dark:text-[#94938E] hover:text-[#E04F33]"
+                  whileHover={{ scale: 1.1 }}
+                  whileTap={{ scale: 0.9 }}
+                >
+                  <XCircle size={24} />
+                </motion.button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
+                {/* Profile Photo */}
+                <div className="bg-[#FAF9F6] dark:bg-[#18181F] border border-[#E5E2DC] dark:border-[#232329] rounded-xl p-4">
+                  <h3 className="text-xs font-mono-tabular text-[#5C5B57] dark:text-[#94938E] mb-3 uppercase">Profile Photo</h3>
+                  {verificationModal.user.photo_path ? (
+                    <AuthenticatedUploadPreview
+                      filePath={verificationModal.user.photo_path}
+                      alt="Profile"
+                    />
+                  ) : (
+                    <div className="w-full h-64 bg-white dark:bg-[#111117] rounded-lg flex items-center justify-center border border-[#E5E2DC] dark:border-[#232329]">
+                      <User className="h-16 w-16 text-[#5C5B57] dark:text-[#94938E]" />
+                    </div>
+                  )}
+                </div>
+
+                {/* ID Card */}
+                <div className="bg-[#FAF9F6] dark:bg-[#18181F] border border-[#E5E2DC] dark:border-[#232329] rounded-xl p-4">
+                  <h3 className="text-xs font-mono-tabular text-[#5C5B57] dark:text-[#94938E] mb-3 uppercase">ID Card</h3>
+                  {verificationModal.user.id_card_path ? (
+                    <AuthenticatedUploadPreview
+                      filePath={verificationModal.user.id_card_path}
+                      alt="ID Card"
+                      isPdf={verificationModal.user.id_card_path.toLowerCase().endsWith('.pdf')}
+                    />
+                  ) : (
+                    <div className="w-full h-64 bg-white dark:bg-[#111117] rounded-lg flex items-center justify-center border border-[#E5E2DC] dark:border-[#232329]">
+                      <Eye className="h-16 w-16 text-[#5C5B57] dark:text-[#94938E]" />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* User Information */}
+              <div className="bg-[#FAF9F6] dark:bg-[#18181F] border border-[#E5E2DC] dark:border-[#232329] rounded-xl p-5 mb-6">
+                <h3 className="text-sm font-bold uppercase tracking-wide mb-4">User Information</h3>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className="flex items-center gap-3 p-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg border border-[#E5E2DC] dark:border-[#232329]">
+                    <User className="h-5 w-5 text-[#0A0A0C] dark:text-[#F5F4F0] flex-shrink-0" />
+                    <div>
+                      <p className="text-xs text-[#5C5B57] dark:text-[#94938E] font-mono uppercase">NAME</p>
+                      <p className="text-sm font-semibold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">{verificationModal.user.name}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 p-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg border border-[#E5E2DC] dark:border-[#232329]">
+                    <User className="h-5 w-5 text-[#0A0A0C] dark:text-[#F5F4F0] flex-shrink-0" />
+                    <div>
+                      <p className="text-xs text-[#5C5B57] dark:text-[#94938E] font-mono uppercase">EMAIL</p>
+                      <p className="text-sm font-semibold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">{verificationModal.user.email}</p>
+                    </div>
+                  </div>
+                  {verificationModal.user.age && (
+                    <div className="flex items-center gap-3 p-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg border border-[#E5E2DC] dark:border-[#232329]">
+                      <div className="h-5 w-5 flex items-center justify-center bg-[#896ABD]/15 rounded text-[#0A0A0C] dark:text-[#F5F4F0] flex-shrink-0">
+                        <span className="text-xs font-bold">A</span>
+                      </div>
+                      <div>
+                        <p className="text-xs text-[#5C5B57] dark:text-[#94938E] font-mono uppercase">AGE</p>
+                        <p className="text-sm font-semibold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">{verificationModal.user.age}</p>
+                      </div>
+                    </div>
+                  )}
+                  {verificationModal.user.year && (
+                    <div className="flex items-center gap-3 p-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg border border-[#E5E2DC] dark:border-[#232329]">
+                      <div className="h-5 w-5 flex items-center justify-center bg-[#896ABD]/15 rounded text-[#0A0A0C] dark:text-[#F5F4F0] flex-shrink-0">
+                        <span className="text-xs font-bold">Y</span>
+                      </div>
+                      <div>
+                        <p className="text-xs text-[#5C5B57] dark:text-[#94938E] font-mono uppercase">YEAR</p>
+                        <p className="text-sm font-semibold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">{verificationModal.user.year}</p>
+                      </div>
+                    </div>
+                  )}
+                  {verificationModal.user.university && (
+                    <div className="flex items-center gap-3 p-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg border border-[#E5E2DC] dark:border-[#232329] md:col-span-2">
+                      <div className="h-5 w-5 flex items-center justify-center bg-[#896ABD]/15 rounded text-[#0A0A0C] dark:text-[#F5F4F0] flex-shrink-0">
+                        <span className="text-xs font-bold">U</span>
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-xs text-[#5C5B57] dark:text-[#94938E] font-mono uppercase">UNIVERSITY</p>
+                        <p className="text-sm font-semibold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">{verificationModal.user.university}</p>
+                      </div>
+                    </div>
+                  )}
+                  {verificationModal.user.department && (
+                    <div className="flex items-center gap-3 p-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg border border-[#E5E2DC] dark:border-[#232329] md:col-span-2">
+                      <div className="h-5 w-5 flex items-center justify-center bg-[#896ABD]/15 rounded text-[#0A0A0C] dark:text-[#F5F4F0] flex-shrink-0">
+                        <span className="text-xs font-bold">D</span>
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-xs text-[#5C5B57] dark:text-[#94938E] font-mono uppercase">DEPARTMENT</p>
+                        <p className="text-sm font-semibold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">{verificationModal.user.department}</p>
+                      </div>
+                    </div>
+                  )}
+                  {verificationModal.user.roll_no && (
+                    <div className="flex items-center gap-3 p-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg border border-[#E5E2DC] dark:border-[#232329]">
+                      <div className="h-5 w-5 flex items-center justify-center bg-[#896ABD]/15 rounded text-[#0A0A0C] dark:text-[#F5F4F0] flex-shrink-0">
+                        <span className="text-xs font-bold">R</span>
+                      </div>
+                      <div>
+                        <p className="text-xs text-[#5C5B57] dark:text-[#94938E] font-mono uppercase">ROLL_NUMBER</p>
+                        <p className="text-sm font-semibold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">{verificationModal.user.roll_no}</p>
+                      </div>
+                    </div>
+                  )}
+                  {verificationModal.user.student_id && (
+                    <div className="flex items-center gap-3 p-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg border border-[#E5E2DC] dark:border-[#232329]">
+                      <div className="h-5 w-5 flex items-center justify-center bg-[#896ABD]/15 rounded text-[#0A0A0C] dark:text-[#F5F4F0] flex-shrink-0">
+                        <span className="text-xs font-bold">ID</span>
+                      </div>
+                      <div>
+                        <p className="text-xs text-[#5C5B57] dark:text-[#94938E] font-mono uppercase">STUDENT_ID</p>
+                        <p className="text-sm font-semibold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">{verificationModal.user.student_id}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex space-x-4 justify-end pt-4 border-t border-[#E5E2DC] dark:border-[#232329]">
+                <motion.button
+                  onClick={() => handleRejectProfile(verificationModal.user!.id)}
+                  className="px-6 py-2 bg-red-500/20 border-2 border-red-500/50 text-red-400 font-bold font-mono rounded-lg hover:bg-red-500/30 transition-all"
+                  whileHover={{ scale: 1.02, boxShadow: '0 0 15px rgba(239, 68, 68, 0.5)' }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  REJECT
+                </motion.button>
+                <motion.button
+                  onClick={() => verifyUser(verificationModal.user!.id, true)}
+                  className="px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all"
+                  whileHover={{ scale: 1.02, boxShadow: '0 0 15px rgba(34, 197, 94, 0.5)' }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  ACCEPT_VERIFICATION
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {/* Edit Paper Modal */}
+        {editPaperModal.isOpen && editPaperModal.paper && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            onClick={() => setEditPaperModal({ isOpen: false, paper: null })}
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-white/95 dark:bg-[#111117]/95 backdrop-blur-xl border border-[#E5E2DC] dark:border-[#232329] rounded-xl shadow-2xl p-6 max-w-2xl w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 className="text-2xl font-bold mb-6 text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">
+                EDIT_PAPER: {editPaperModal.paper.title}
+              </h2>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                    COURSE_CODE
+                  </label>
+                  <input
+                    type="text"
+                    value={editPaperForm.course_id}
+                    onChange={(e) => setEditPaperForm({ ...editPaperForm, course_id: e.target.value })}
+                    className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                    list="course-list"
+                  />
+                  <datalist id="course-list">
+                    {courses.map(course => (
+                      <option key={course.id} value={course.code}>
+                        {course.code} - {course.name}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      PAPER_TYPE
+                    </label>
+                    <select
+                      value={editPaperForm.paper_type}
+                      onChange={(e) => setEditPaperForm({ ...editPaperForm, paper_type: e.target.value })}
+                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                    >
+                      <option value="assignment">ASSIGNMENT</option>
+                      <option value="quiz">QUIZ</option>
+                      <option value="midterm">MIDTERM</option>
+                      <option value="endterm">ENDTERM</option>
+                      <option value="project">PROJECT</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      YEAR
+                    </label>
+                    <input
+                      type="number"
+                      value={editPaperForm.year}
+                      onChange={(e) => setEditPaperForm({ ...editPaperForm, year: e.target.value })}
+                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                      min="2020"
+                      max="2030"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
+                      SEMESTER
+                    </label>
+                    <select
+                      value={editPaperForm.semester}
+                      onChange={(e) => setEditPaperForm({ ...editPaperForm, semester: e.target.value })}
+                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30"
+                    >
+                      <option value="">SELECT_SEMESTER</option>
+                      <option value="1">Semester 1</option>
+                      <option value="2">Semester 2</option>
+                      <option value="3">Semester 3</option>
+                      <option value="4">Semester 4</option>
+                      <option value="5">Semester 5</option>
+                      <option value="6">Semester 6</option>
+                      <option value="7">Semester 7</option>
+                      <option value="8">Semester 8</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex space-x-2 justify-end pt-4 border-t border-[#E5E2DC] dark:border-[#232329]">
+                  <motion.button
+                    onClick={() => setEditPaperModal({ isOpen: false, paper: null })}
+                    className="px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-all"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    CANCEL
+                  </motion.button>
+                  <motion.button
+                    onClick={() => editPaper(editPaperModal.paper!.id)}
+                    className="px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    SAVE_CHANGES
+                  </motion.button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </div>
+
+      {/* Rejection Feedback Modal for Papers */}
+      {
+        rejectionModal.isOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+            onClick={() => setRejectionModal({ isOpen: false, paperId: 0, feedback: '' })}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] shadow-2xl rounded-xl p-6 max-w-md w-full mx-4"
+            >
+              <h3 className="text-xl font-bold text-red-400 mb-4 font-mono">REJECT PAPER</h3>
+              <label className="block text-sm font-mono text-red-400/70 mb-2 uppercase">
+                REJECTION FEEDBACK (REQUIRED)
+              </label>
+              <textarea
+                value={rejectionModal.feedback}
+                onChange={(e) => setRejectionModal({ ...rejectionModal, feedback: e.target.value })}
+                placeholder="Enter feedback for rejection (e.g., 'Incomplete information', 'File format not supported', etc.)"
+                className="w-full px-4 py-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border-2 border-red-500/30 rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/50 resize-none"
+                rows={5}
+                autoFocus
+              />
+              <div className="flex space-x-4 justify-end mt-4">
+                <motion.button
+                  onClick={() => setRejectionModal({ isOpen: false, paperId: 0, feedback: '' })}
+                  className="px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-all"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  CANCEL
+                </motion.button>
+                <motion.button
+                  onClick={submitRejection}
+                  className="px-6 py-2 bg-red-500/20 border-2 border-red-500/50 text-red-400 font-bold font-mono rounded-lg hover:bg-red-500/30 transition-all"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  SUBMIT REJECTION
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )
+      }
+
+      {/* Rejection Feedback Modal for Profiles */}
+      {
+        profileRejectionModal.isOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+            onClick={() => setProfileRejectionModal({ isOpen: false, userId: 0, feedback: '' })}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] shadow-2xl rounded-xl p-6 max-w-md w-full mx-4"
+            >
+              <h3 className="text-xl font-bold text-red-400 mb-4 font-mono">REJECT PROFILE</h3>
+              <label className="block text-sm font-mono text-red-400/70 mb-2 uppercase">
+                REJECTION FEEDBACK (REQUIRED)
+              </label>
+              <textarea
+                value={profileRejectionModal.feedback}
+                onChange={(e) => setProfileRejectionModal({ ...profileRejectionModal, feedback: e.target.value })}
+                placeholder="Enter feedback for rejection (e.g., 'ID card not clear', 'Missing information', etc.)"
+                className="w-full px-4 py-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border-2 border-red-500/30 rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/50 resize-none"
+                rows={5}
+                autoFocus
+              />
+              <div className="flex space-x-4 justify-end mt-4">
+                <motion.button
+                  onClick={() => setProfileRejectionModal({ isOpen: false, userId: 0, feedback: '' })}
+                  className="px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-all"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  CANCEL
+                </motion.button>
+                <motion.button
+                  onClick={submitProfileRejection}
+                  className="px-6 py-2 bg-red-500/20 border-2 border-red-500/50 text-red-400 font-bold font-mono rounded-lg hover:bg-red-500/30 transition-all"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  SUBMIT REJECTION
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )
+      }
+
+      {/* In-app Confirmation Modal */}
+      <ConfirmDialogModal dialog={confirmDialog} onResolve={resolveConfirm} />
+
+      {/* Add CSS for glitch animation */}
+      <style>{`
+        @keyframes glitch {
+          0%, 100% { transform: translate(0); }
+          20% { transform: translate(-2px, 2px); }
+          40% { transform: translate(-2px, -2px); }
+          60% { transform: translate(2px, 2px); }
+          80% { transform: translate(2px, -2px); }
+        }
+      `}</style>
+    </div >
+  );
+};
+
+export default AdminDashboard;

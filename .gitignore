@@ -1,0 +1,57 @@
+# ============================================================================
+# Learn JKLU 2.0 — Repository .gitignore
+# ============================================================================
+
+# Environment & Secret Files
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Next.js / Frontend Build Artifacts
+.next/
+**/.next/
+dist/
+dist-ssr/
+out/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# Backend Runtime Data, Storage & User/Snapshot Dumps
+backend/data/pgdata*/
+backend/storage/
+backend/seed_data/
+pastpaper/
+pastpaper_bin/
+*.bin
+*.sqlite
+*.db
+
+# Logs & Runtime Files
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor & OS Files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.cursor/*
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
