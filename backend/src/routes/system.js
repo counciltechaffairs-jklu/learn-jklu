@@ -77,23 +77,33 @@ router.get('/metrics', async (req, res) => {
   const isStaff = canAccessAdminPanel(user);
   const db = await getDb();
   const counts = await getOrSetCache('metrics:counts', 15000, async () => {
-    const [u, c, p, co, pp] = await Promise.all([
+    const [u, c, p, co, pp, deptRes] = await Promise.all([
       db.query('SELECT COUNT(*)::text as count FROM users'),
       db.query('SELECT COUNT(*)::text as count FROM courses'),
       db.query('SELECT COUNT(*)::text as count FROM papers WHERE UPPER(status) = $1', ['APPROVED']),
       db.query('SELECT COUNT(*)::int as count FROM course_offerings WHERE is_released = TRUE'),
       db.query('SELECT COUNT(*)::int as count FROM professor_profiles WHERE is_public = TRUE'),
+      db.query(
+        "SELECT UPPER(COALESCE(NULLIF(TRIM(department), ''), 'OTHER')) AS dept, COUNT(*)::int AS count FROM papers WHERE UPPER(status) = 'APPROVED' GROUP BY 1"
+      ),
     ]);
     const dbCourses = Number(c.rows[0]?.count || 0);
     const dbPapers = Number(p.rows[0]?.count || 0);
     const localStats = getLocalPastpaperCatalog().stats;
+    const dbByDept = {};
+    for (const row of deptRes.rows || []) {
+      if (row.dept) {
+        dbByDept[row.dept] = Number(row.count || 0);
+      }
+    }
+    const useDbDept = dbPapers > 0 && Object.keys(dbByDept).length > 0;
 
     return {
       users: Number(u.rows[0]?.count || 0),
       courses: dbCourses > 0 ? dbCourses : localStats.totalCourses || 748,
       approvedPapers: dbPapers > 0 ? dbPapers : localStats.totalPapers || 1950,
-      programmes: Object.keys(localStats.byDept || {}).length || 9,
-      byDepartment: localStats.byDept || {},
+      programmes: useDbDept ? Object.keys(dbByDept).length : Object.keys(localStats.byDept || {}).length || 9,
+      byDepartment: useDbDept ? dbByDept : localStats.byDept || {},
       activeClassrooms: Number(co.rows[0]?.count || 0),
       facultyCount: Number(pp.rows[0]?.count || 0),
     };

@@ -1,8 +1,15 @@
+import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getDb, prisma } from '../src/config/db.js';
+import { getDb, closeDb } from '../src/config/db.js';
+import { invalidateCachePrefix, closeCache } from '../src/config/cache.js';
 
-const BINARY_OUT_DIR = path.resolve(process.cwd(), '../pastpaper_bin');
+const BINARY_OUT_DIR =
+  [
+    path.resolve(process.cwd(), '../pastpaper_bin'),
+    path.resolve(process.cwd(), '../../pastpaper_bin'),
+  ].find((dir) => fs.existsSync(path.join(dir, 'binary_manifest.json'))) ||
+  path.resolve(process.cwd(), '../../pastpaper_bin');
 const MANIFEST_PATH = path.join(BINARY_OUT_DIR, 'binary_manifest.json');
 
 const SCHOOL_BY_DEPT = {
@@ -127,171 +134,229 @@ async function main() {
   const targetItems = allManifest.filter((x) => x.year >= 2020 && x.year <= 2026);
 
   console.log(
-    `🚀 Preparing to push ${targetItems.length} verified papers (2020–2026) + binary blobs into Neon PostgreSQL...`
+    `🚀 Preparing to push ${targetItems.length} verified papers (2020–2026) + binary blobs into Supabase PostgreSQL...`
   );
 
   const db = await getDb();
   for (let attempt = 1; attempt <= 4; attempt++) {
     try {
       await db.query('SELECT 1');
-      await prisma.$connect();
       break;
     } catch {
-      console.log(`⏳ Waking Neon PostgreSQL (Attempt ${attempt}/4)...`);
+      console.log(`⏳ Waking PostgreSQL (Attempt ${attempt}/4)...`);
       await new Promise((r) => setTimeout(r, 2500));
     }
   }
 
-  // Clear existing papers and courses first so we have a clean 2020-2026 dataset
-  await prisma.paper.deleteMany({});
-  await prisma.course.deleteMany({});
+  try {
+    // Build unique courses map with accurate paper counts (non-destructive: preserves existing classroom/course data)
+    const coursesMap = new Map();
+    const enrichedPapers = [];
 
-  // Build unique courses map with accurate paper counts
-  const coursesMap = new Map();
-  const enrichedPapers = [];
+    for (const item of targetItems) {
+      const dept = item.department || 'B.TECH';
+      const sem = String(item.semester || '1');
+      const school = SCHOOL_BY_DEPT[dept] || 'IET';
+      const { code, name } = parseVerifiedCourseCodeAndName(
+        item.title,
+        item.file_name,
+        dept,
+        sem
+      );
+      const examSession = formatExamSession(item);
 
-  for (const item of targetItems) {
-    const dept = item.department || 'B.TECH';
-    const sem = String(item.semester || '1');
-    const school = SCHOOL_BY_DEPT[dept] || 'IET';
-    const { code, name } = parseVerifiedCourseCodeAndName(
-      item.title,
-      item.file_name,
-      dept,
-      sem
-    );
-    const examSession = formatExamSession(item);
+      let courseEntry = coursesMap.get(code);
+      if (!courseEntry) {
+        courseEntry = {
+          code,
+          name,
+          department: dept,
+          school,
+          semester: sem,
+          paper_count: 0,
+          description: `${dept} (${school}) — Semester ${sem}`,
+        };
+        coursesMap.set(code, courseEntry);
+      }
+      courseEntry.paper_count += 1;
 
-    let courseEntry = coursesMap.get(code);
-    if (!courseEntry) {
-      courseEntry = {
-        code,
-        name,
-        department: dept,
+      const cleanTitle = `${code} — ${name} (${examSession})`;
+      const cleanDescription = `Programme: ${dept} (${school}) | Semester: ${sem} | Course: ${code} - ${name} | Session: ${examSession} | Issued: ${
+        item.issued || item.year
+      } | MD5: ${item.checksum_md5.slice(0, 12)}`;
+
+      enrichedPapers.push({
+        ...item,
+        courseCode: code,
+        courseName: name,
         school,
-        semester: sem,
-        paper_count: 0,
-        description: `${dept} (${school}) — Semester ${sem}`,
-      };
-      coursesMap.set(code, courseEntry);
-    }
-    courseEntry.paper_count += 1;
-
-    const cleanTitle = `${code} — ${name} (${examSession})`;
-    const cleanDescription = `Programme: ${dept} (${school}) | Semester: ${sem} | Course: ${code} - ${name} | Session: ${examSession} | Issued: ${
-      item.issued || item.year
-    } | MD5: ${item.checksum_md5.slice(0, 12)}`;
-
-    enrichedPapers.push({
-      ...item,
-      courseCode: code,
-      courseName: name,
-      school,
-      examSession,
-      cleanTitle,
-      cleanDescription,
-    });
-  }
-
-  const courseList = Array.from(coursesMap.values());
-  console.log(`📚 Inserting ${courseList.length} unique courses into Neon PostgreSQL...`);
-  await prisma.course.createMany({
-    data: courseList,
-    skipDuplicates: true,
-  });
-
-  const dbCourses = await prisma.course.findMany({ select: { id: true, code: true } });
-  const codeToId = new Map(dbCourses.map((c) => [c.code.toUpperCase(), c.id]));
-
-  console.log(
-    `📦 Uploading ${enrichedPapers.length} papers with compressed binary (.bin) BYTEA blobs (Concurrency: 8)...`
-  );
-
-  let uploaded = 0;
-  let totalBinMB = 0;
-  let idx = 0;
-  const CONCURRENCY = 8;
-
-  async function worker() {
-    while (idx < enrichedPapers.length) {
-      const current = enrichedPapers[idx++];
-      const courseId = codeToId.get(current.courseCode.toUpperCase());
-      const binAbsPath = path.join(BINARY_OUT_DIR, current.bin_path);
-      const binBuffer = fs.existsSync(binAbsPath) ? fs.readFileSync(binAbsPath) : null;
-
-      await prisma.paper.upsert({
-        where: { aura_uuid: current.uuid },
-        update: {
-          course_id: courseId,
-          title: current.cleanTitle,
-          description: current.cleanDescription,
-          paper_type: current.paper_type,
-          exam_session: current.examSession,
-          year: current.year,
-          semester: String(current.semester),
-          department: current.department,
-          file_path: current.local_pdf_path,
-          file_name: current.file_name,
-          file_size: current.raw_size_bytes,
-          file_blob: binBuffer,
-          checksum_md5: current.checksum_md5,
-          source_uri: current.bitstream_url,
-          status: 'APPROVED',
-          public_link_id: current.uuid.replace(/-/g, '').slice(0, 16),
-        },
-        create: {
-          course_id: courseId,
-          uploaded_by: null,
-          aura_uuid: current.uuid,
-          title: current.cleanTitle,
-          description: current.cleanDescription,
-          paper_type: current.paper_type,
-          exam_session: current.examSession,
-          year: current.year,
-          semester: String(current.semester),
-          department: current.department,
-          file_path: current.local_pdf_path,
-          file_name: current.file_name,
-          file_size: current.raw_size_bytes,
-          file_blob: binBuffer,
-          checksum_md5: current.checksum_md5,
-          source_uri: current.bitstream_url,
-          status: 'APPROVED',
-          public_link_id: current.uuid.replace(/-/g, '').slice(0, 16),
-        },
+        examSession,
+        cleanTitle,
+        cleanDescription,
       });
+    }
 
-      uploaded++;
-      totalBinMB += (binBuffer ? binBuffer.length : 0) / 1024 / 1024;
-      if (uploaded % 50 === 0 || uploaded === enrichedPapers.length) {
-        console.log(
-          `   ✅ Uploaded ${uploaded}/${enrichedPapers.length} papers to Neon PostgreSQL (${totalBinMB.toFixed(
-            2
-          )} MB binary stored)`
-        );
+    const courseList = Array.from(coursesMap.values());
+    console.log(`📚 Upserting ${courseList.length} unique courses into Supabase PostgreSQL...`);
+    const COURSE_BATCH = 200;
+    for (let i = 0; i < courseList.length; i += COURSE_BATCH) {
+      const batch = courseList.slice(i, i + COURSE_BATCH);
+      await db.query(
+        `INSERT INTO courses (code, name, department, school, semester, paper_count, description)
+         SELECT * FROM UNNEST(
+           $1::text[],
+           $2::text[],
+           $3::text[],
+           $4::text[],
+           $5::text[],
+           $6::int[],
+           $7::text[]
+         )
+         ON CONFLICT (code) DO UPDATE SET
+           name = EXCLUDED.name,
+           department = EXCLUDED.department,
+           school = EXCLUDED.school,
+           paper_count = EXCLUDED.paper_count`,
+        [
+          batch.map((r) => r.code),
+          batch.map((r) => r.name),
+          batch.map((r) => r.department),
+          batch.map((r) => r.school),
+          batch.map((r) => r.semester),
+          batch.map((r) => r.paper_count),
+          batch.map((r) => r.description),
+        ]
+      );
+    }
+
+    const dbCoursesRes = await db.query('SELECT id, code FROM courses');
+    const codeToId = new Map(dbCoursesRes.rows.map((c) => [String(c.code).toUpperCase(), Number(c.id)]));
+
+    console.log(
+      `📦 Uploading ${enrichedPapers.length} papers with compressed binary (.bin) BYTEA blobs (Concurrency: 5)...`
+    );
+
+    const UPSERT_PAPER_SQL = `
+      INSERT INTO papers (
+        course_id, uploaded_by, aura_uuid, title, description, paper_type,
+        exam_session, year, semester, department, file_path, file_name,
+        file_size, file_blob, checksum_md5, source_uri, status, public_link_id
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'APPROVED',$17)
+      ON CONFLICT (aura_uuid) DO UPDATE SET
+        course_id = EXCLUDED.course_id,
+        title = EXCLUDED.title,
+        description = EXCLUDED.description,
+        paper_type = EXCLUDED.paper_type,
+        exam_session = EXCLUDED.exam_session,
+        year = EXCLUDED.year,
+        semester = EXCLUDED.semester,
+        department = EXCLUDED.department,
+        file_path = EXCLUDED.file_path,
+        file_name = EXCLUDED.file_name,
+        file_size = EXCLUDED.file_size,
+        file_blob = EXCLUDED.file_blob,
+        checksum_md5 = EXCLUDED.checksum_md5,
+        source_uri = EXCLUDED.source_uri,
+        status = 'APPROVED',
+        public_link_id = EXCLUDED.public_link_id,
+        updated_at = NOW()
+    `;
+
+    let uploaded = 0;
+    let totalBinMB = 0;
+    let idx = 0;
+    const CONCURRENCY = 5;
+
+    async function upsertPaperWithRetry(params) {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          await db.query(UPSERT_PAPER_SQL, params);
+          return;
+        } catch (err) {
+          if (attempt === 2) throw err;
+          await new Promise((r) => setTimeout(r, 800));
+        }
       }
     }
+
+    async function worker() {
+      while (idx < enrichedPapers.length) {
+        const current = enrichedPapers[idx++];
+        const courseId = codeToId.get(current.courseCode.toUpperCase()) || null;
+        const binAbsPath = path.join(BINARY_OUT_DIR, current.bin_path);
+        const binBuffer = fs.existsSync(binAbsPath) ? fs.readFileSync(binAbsPath) : null;
+        const publicLinkId = current.uuid.replace(/-/g, '').slice(0, 16);
+
+        await upsertPaperWithRetry([
+          courseId,
+          null,
+          current.uuid,
+          current.cleanTitle,
+          current.cleanDescription,
+          current.paper_type,
+          current.examSession,
+          current.year,
+          String(current.semester),
+          current.department,
+          current.local_pdf_path,
+          current.file_name,
+          current.raw_size_bytes,
+          binBuffer,
+          current.checksum_md5,
+          current.bitstream_url,
+          publicLinkId,
+        ]);
+
+        uploaded++;
+        totalBinMB += (binBuffer ? binBuffer.length : 0) / 1024 / 1024;
+        if (uploaded % 50 === 0 || uploaded === enrichedPapers.length) {
+          console.log(
+            `   ✅ Uploaded ${uploaded}/${enrichedPapers.length} papers to Supabase PostgreSQL (${totalBinMB.toFixed(
+              2
+            )} MB binary stored)`
+          );
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+
+    await db.query(
+      `DELETE FROM courses
+       WHERE id NOT IN (SELECT DISTINCT course_id FROM papers WHERE course_id IS NOT NULL)
+         AND code NOT IN (SELECT DISTINCT course_code FROM course_offerings WHERE course_code IS NOT NULL)`
+    );
+
+    await db.exec(`SELECT setval('courses_id_seq', COALESCE((SELECT MAX(id) FROM courses), 1), true)`);
+    await db.exec(`SELECT setval('papers_id_seq', COALESCE((SELECT MAX(id) FROM papers), 1), true)`);
+
+    invalidateCachePrefix('papers:');
+    invalidateCachePrefix('courses:');
+    invalidateCachePrefix('metrics:');
+    invalidateCachePrefix('stats:');
+    await new Promise((r) => setTimeout(r, 800));
+
+    const [uRes, cRes, pRes, dbSizeRes] = await Promise.all([
+      db.query('SELECT COUNT(*)::int AS c FROM users'),
+      db.query('SELECT COUNT(*)::int AS c FROM courses'),
+      db.query('SELECT COUNT(*)::int AS c FROM papers'),
+      db.query(`SELECT pg_size_pretty(pg_database_size(current_database())) AS db_size`),
+    ]);
+
+    const finalCounts = {
+      users: uRes.rows[0]?.c || 0,
+      courses: cRes.rows[0]?.c || 0,
+      papers: pRes.rows[0]?.c || 0,
+    };
+
+    console.log(`\n🎉 SUPABASE POSTGRESQL UPLOAD COMPLETE!`);
+    console.log(`   📊 Final Counts           :`, finalCounts);
+    console.log(`   🗜️  Binary Payload         : ${totalBinMB.toFixed(2)} MB`);
+    console.log(`   🐘 Total Supabase DB Size : ${dbSizeRes.rows[0]?.db_size} / 500 MB`);
+  } finally {
+    await closeCache();
+    await closeDb();
   }
-
-  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
-
-  await db.exec(`SELECT setval('courses_id_seq', COALESCE((SELECT MAX(id) FROM courses), 1), true)`);
-  await db.exec(`SELECT setval('papers_id_seq', COALESCE((SELECT MAX(id) FROM papers), 1), true)`);
-
-  const finalCounts = {
-    users: await prisma.user.count(),
-    courses: await prisma.course.count(),
-    papers: await prisma.paper.count(),
-  };
-  const dbSizeRes = await db.query(
-    `SELECT pg_size_pretty(pg_database_size(current_database())) AS db_size`
-  );
-
-  console.log(`\n🎉 NEON POSTGRESQL UPLOAD COMPLETE!`);
-  console.log(`   📊 Final Counts       :`, finalCounts);
-  console.log(`   🗜️  Binary Payload     : ${totalBinMB.toFixed(2)} MB`);
-  console.log(`   🐘 Total Neon DB Size : ${dbSizeRes.rows[0]?.db_size} / 500 MB`);
-  process.exit(0);
 }
 
 main().catch((err) => {
