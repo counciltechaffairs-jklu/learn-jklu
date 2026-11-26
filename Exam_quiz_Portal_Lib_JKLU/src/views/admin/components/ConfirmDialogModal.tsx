@@ -11,11 +11,11 @@ const ConfirmDialogModal: React.FC<ConfirmDialogModalProps> = ({ dialog, onResol
 
   return (
     <div
-      className="fixed inset-0 bg-black/65 backdrop-blur-sm flex items-center justify-center p-4 z-[60]"
+      className="modal-backdrop-enter fixed inset-0 bg-black/65 backdrop-blur-sm flex items-center justify-center p-4 z-[60]"
       onClick={() => onResolve(false)}
     >
       <div
-        className="w-full max-w-md rounded-2xl border border-[#E6E4DD] dark:border-white/10 bg-[#FFFFFF] dark:bg-[#111115] p-6 shadow-2xl"
+        className="modal-panel-enter w-full max-w-md rounded-2xl border border-[#E6E4DD] dark:border-white/10 bg-[#FFFFFF] dark:bg-[#111115] p-6 shadow-[var(--shadow-elevated)]"
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="text-lg font-semibold text-[#0A0A0C] dark:text-[#F5F4F0] mb-2">

@@ -19,11 +19,14 @@ import {
   ArrowUpDown,
   Download,
   User,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import GlobalNavbar from '@/components/layout/GlobalNavbar';
 import Footer from '@/components/layout/Footer';
 import PaperCard from '@/components/papers/PaperCard';
 import FilePreviewModal from '@/components/papers/FilePreviewModal';
+import { DimensionalTitleBlock } from '@/components/dimensional/DimensionalKit';
 import { ExamTypePictogram, ProgrammePictogram } from '@/components/viz/Pictograms';
 import { usePrefersReducedMotion } from '@/components/viz/chartTokens';
 import { API } from '@/utils/api';
@@ -70,6 +73,8 @@ const PastPapersPage: React.FC = () => {
 
   const [courses, setCourses] = useState<any[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadNonce, setReloadNonce] = useState<number>(0);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(() =>
     Boolean(searchParams.get('sem') || searchParams.get('year') || searchParams.get('course'))
   );
@@ -156,6 +161,7 @@ const PastPapersPage: React.FC = () => {
   useEffect(() => {
     let active = true;
     setLoading(true);
+    setLoadError(null);
 
     API.getPublicPapersPaginated(currentPage, PAGE_SIZE, {
       q: debouncedQuery || undefined,
@@ -209,6 +215,13 @@ const PastPapersPage: React.FC = () => {
       })
       .catch((err) => {
         console.error('Failed to load paginated papers:', err);
+        if (active) {
+          setLoadError(
+            err?.message && err.message !== 'Error'
+              ? err.message
+              : 'Unable to reach the question paper archive right now. Please try again.'
+          );
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -226,6 +239,7 @@ const PastPapersPage: React.FC = () => {
     selectedYear,
     selectedCourseCode,
     sortBy,
+    reloadNonce,
   ]);
 
   // Keyboard shortcut Cmd/Ctrl + K
@@ -241,17 +255,27 @@ const PastPapersPage: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  // Animate cards on page/filter load
+  // Animate visible first row cards on page/filter load (capped decay, non-blocking)
   useEffect(() => {
     if (!loading && papers.length > 0) {
+      const prefersReduced =
+        typeof window !== 'undefined' &&
+        window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
       anime.remove('.paper-card-anim');
+      if (prefersReduced) {
+        document.querySelectorAll('.paper-card-anim').forEach((el) => {
+          (el as HTMLElement).style.opacity = '1';
+          (el as HTMLElement).style.transform = 'none';
+        });
+        return;
+      }
       anime({
         targets: '.paper-card-anim',
-        translateY: [14, 0],
+        translateY: [10, 0],
         opacity: [0, 1],
-        duration: 360,
-        delay: anime.stagger(16, { start: 10 }),
-        easing: 'easeOutCubic',
+        duration: 240,
+        delay: (_el: Element, i: number) => (i < 6 ? Math.round(Math.pow(i, 0.85) * 18) : 95),
+        easing: 'cubicBezier(0.23, 1, 0.32, 1)',
       });
     }
   }, [papers, loading]);
@@ -363,49 +387,74 @@ const PastPapersPage: React.FC = () => {
       <GlobalNavbar />
 
       {/* Main Content */}
-      <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-8 space-y-7">
+      <main className="relative z-10 flex-1 max-w-[1680px] w-full mx-auto px-4 sm:px-6 lg:px-10 py-6 sm:py-8 space-y-6">
         {/* Unified Smart Search & Multi-Faceted Filter Console */}
-        <section className="relative overflow-hidden rounded-2xl p-5 sm:p-7 space-y-5 bg-white/90 dark:bg-[#111117]/85 backdrop-blur-md border border-[#E5E2DC]/90 dark:border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.05)] dark:shadow-[0_12px_40px_rgba(0,0,0,0.4)]">
-          <img
-            src="/illustrations/archive-abstract.jpg"
-            alt=""
+        <section className="relative overflow-hidden rounded-2xl p-6 sm:p-8 space-y-6 bg-white/95 border border-[#DDD8CE] shadow-[0_6px_28px_rgba(10,10,12,0.05)]">
+          {/* Dark-Shaded Archive Artwork Backdrop with Halo Glow (right edge) */}
+          <div
             aria-hidden="true"
-            className="pointer-events-none select-none absolute inset-y-0 right-0 h-full w-64 sm:w-80 object-cover opacity-[0.07] dark:opacity-[0.11] mix-blend-multiply dark:mix-blend-screen [mask-image:linear-gradient(to_left,black_30%,transparent_100%)]"
+            className="pointer-events-none select-none hidden sm:block absolute inset-y-0 right-0 w-72 md:w-96 overflow-hidden"
+            style={{
+              maskImage: 'linear-gradient(to left, black 50%, transparent 100%)',
+              WebkitMaskImage: 'linear-gradient(to left, black 50%, transparent 100%)',
+            }}
+          >
+            <div className="absolute inset-0 bg-[#12121A]" />
+            <img
+              src="/illustrations/archive-abstract.jpg"
+              alt=""
+              className="w-full h-full object-cover opacity-85"
+            />
+            <div
+              className="absolute inset-0"
+              style={{
+                background:
+                  'radial-gradient(circle at 78% 30%, rgba(224,79,51,0.34), transparent 55%), radial-gradient(circle at 58% 78%, rgba(137,106,189,0.44), transparent 58%), linear-gradient(90deg, rgba(255,255,255,0.96) 0%, rgba(18,18,26,0.55) 45%, rgba(18,18,26,0.32) 100%)',
+              }}
+            />
+          </div>
+          <div className="relative z-10 space-y-6">
+          <DimensionalTitleBlock
+            dwgNo="JKLU-ARC-01"
+            scope="VERIFIED EXAM ARCHIVE"
+            cells={[
+              { label: 'CATALOG', value: totalInCatalog > 0 ? `${totalInCatalog.toLocaleString()} PAPERS` : 'SYNCING' },
+              { label: 'SPAN', value: '2012–2026' },
+            ]}
           />
-          <div className="relative z-10 space-y-5">
           {/* Header Row */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-mono-tabular text-[11px] uppercase tracking-wider text-[#E04F33] dark:text-[#C084FC] font-semibold">
+                <span className="font-mono-tabular text-xs uppercase tracking-wider text-[#E04F33] font-semibold">
                   JKLU VERIFIED ARCHIVE · {totalInCatalog > 0 ? totalInCatalog.toLocaleString() : '—'} PAPERS ·{' '}
                   {courses.length > 0 ? courses.length.toLocaleString() : '—'} COURSES
                 </span>
               </div>
-              <h1 className="text-xl sm:text-2xl font-bold tracking-tight mt-0.5">
-                Search &amp; Filter Past Question Papers
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight mt-1 text-[#0A0A0C]">
+                Past Question Papers
               </h1>
             </div>
 
-            <div className="flex items-center gap-2 text-xs text-[#5C5B57] dark:text-[#A09F9A] font-mono-tabular">
-              <span>supports short-forms (DSA, RL, DAA, OS) &amp; typo correction</span>
-              <kbd className="hidden sm:inline-block px-1.5 py-0.5 rounded border border-[#E5E2DC] dark:border-white/15">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#12121A]/90 text-[#F5F4F0] border border-white/15 shadow-[0_0_20px_rgba(137,106,189,0.35)] text-xs sm:text-sm font-mono-tabular">
+              <span>Try DSA, OS, DBMS, RL</span>
+              <kbd className="hidden sm:inline-block px-2 py-0.5 rounded bg-white/15 border border-white/20 text-white text-xs">
                 ⌘K
               </kbd>
             </div>
           </div>
 
           {/* Tier 1: Search Input + Collapsible Filters Trigger */}
-          <div className="flex flex-col sm:flex-row gap-2.5">
+          <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
-              <Search className="w-4 h-4 text-[#896ABD] dark:text-[#A855F7] absolute left-4 top-1/2 -translate-y-1/2" />
+              <Search className="w-5 h-5 text-[#896ABD] dark:text-[#A855F7] absolute left-4 top-1/2 -translate-y-1/2" />
               <input
                 ref={searchInputRef}
                 type="text"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="Search code, subject, or DSA..."
-                className="w-full pl-11 pr-10 py-3 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6]/90 dark:bg-[#0A0A0C]/90 text-sm focus:outline-none focus:border-[#896ABD] dark:focus:border-[#A855F7] transition-[border-color]"
+                placeholder="Search course code, subject name, or short-form (e.g. DSA)..."
+                className="w-full pl-12 pr-10 py-3.5 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0B0B0F] text-base focus:outline-none focus:border-[#896ABD] dark:focus:border-[#A855F7] transition-[border-color]"
               />
               {searchInput && (
                 <button
@@ -443,16 +492,16 @@ const PastPapersPage: React.FC = () => {
               }}
               disabled={surpriseLoading}
               title="Open a random past paper from the archive"
-              className="px-3.5 py-3 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6]/85 dark:bg-[#0A0A0C]/85 text-xs font-mono-tabular font-medium text-[#5C5B57] dark:text-[#C4C3BE] hover:border-[#E04F33] hover:text-[#E04F33] dark:hover:text-[#FF785A] inline-flex items-center justify-center gap-2 shrink-0 transition-[border-color] disabled:opacity-50"
+              className="px-4 py-3.5 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0B0B0F] text-sm font-medium text-[#5C5B57] dark:text-[#C4C3BE] hover:border-[#E04F33] hover:text-[#E04F33] dark:hover:text-[#FF785A] inline-flex items-center justify-center gap-2 shrink-0 transition-[border-color] disabled:opacity-50"
             >
-              <Shuffle className="w-3.5 h-3.5 text-[#E04F33]" />
+              <Shuffle className="w-4 h-4 text-[#E04F33]" />
               <span>{surpriseLoading ? 'Picking...' : 'Surprise Me'}</span>
             </button>
 
             <button
               type="button"
               onClick={() => setShowAdvancedFilters((v) => !v)}
-              className={`px-4 py-3 rounded-xl border text-xs font-mono-tabular font-medium inline-flex items-center justify-center gap-2 shrink-0 transition-[border-color] ${
+              className={`px-4 py-3.5 rounded-xl border text-sm font-medium inline-flex items-center justify-center gap-2 shrink-0 transition-[border-color] ${
                 showAdvancedFilters || advancedFilterCount > 0
                   ? 'border-[#896ABD] bg-[#896ABD]/10 text-[#0A0A0C] dark:text-[#F5F4F0]'
                   : 'border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6]/80 dark:bg-[#0A0A0C]/80 text-[#5C5B57] dark:text-[#C4C3BE] hover:border-[#0A0A0C] dark:hover:border-[#F5F4F0]'
@@ -554,11 +603,11 @@ const PastPapersPage: React.FC = () => {
               </div>
 
               {/* Exam Type Pills with Pictograms, Morphing Highlight & Proportional Volume Bars */}
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] font-mono-tabular uppercase text-[#5C5B57] dark:text-[#A09F9A] mr-1">
+              <div className="flex flex-wrap items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/95 border border-[#DDD8CE] shadow-sm">
+                <span className="text-[11px] font-mono-tabular uppercase text-[#353430] font-semibold mr-1">
                   Exam Type:
                 </span>
-                {(['ALL', 'ENDTERM', 'MIDTERM'] as const).map((t) => {
+                {(['ALL', 'ENDTERM', 'MIDTERM', 'QUIZ'] as const).map((t) => {
                   const isActive = selectedType === t;
                   const typeTotal =
                     t === 'ALL'
@@ -575,10 +624,10 @@ const PastPapersPage: React.FC = () => {
                       type="button"
                       aria-pressed={isActive}
                       onClick={() => setSelectedType(t)}
-                      className={`relative overflow-hidden px-3 py-1.5 rounded-lg text-xs font-mono-tabular transition-[border-color] border ${
+                      className={`relative overflow-hidden px-3 py-1.5 rounded-lg text-xs font-mono-tabular font-medium transition-[border-color] border ${
                         isActive
                           ? 'text-white border-[#E04F33]'
-                          : 'bg-transparent border-[#E5E2DC] dark:border-white/15 text-[#5C5B57] dark:text-[#C4C3BE] hover:border-[#E04F33]'
+                          : 'bg-white border-[#DDD8CE] text-[#0A0A0C] hover:border-[#E04F33]'
                       }`}
                     >
                       {isActive && (
@@ -605,7 +654,13 @@ const PastPapersPage: React.FC = () => {
                           <ExamTypePictogram type={t} className="w-3.5 h-3.5 shrink-0" />
                         )}
                         <span>
-                          {t === 'ALL' ? 'All Exams' : t === 'ENDTERM' ? 'End-Term' : 'Mid-Term'}
+                          {t === 'ALL'
+                            ? 'All Exams'
+                            : t === 'ENDTERM'
+                              ? 'End-Term'
+                              : t === 'MIDTERM'
+                                ? 'Mid-Term'
+                                : 'Quiz'}
                         </span>
                       </span>
                     </button>
@@ -619,15 +674,14 @@ const PastPapersPage: React.FC = () => {
               {showAdvancedFilters && (
                 <motion.div
                   key="advanced-filters-drawer"
-                  initial={reducedMotion ? false : { opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={reducedMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
-                  transition={{ duration: reducedMotion ? 0 : 0.22 }}
-                  className="overflow-hidden"
+                  initial={reducedMotion ? false : { opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: reducedMotion ? 0 : 0.14 }}
                 >
-                  <div className="pt-4 border-t border-[#E5E2DC]/60 dark:border-white/10 space-y-4">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-mono-tabular text-[#5C5B57] dark:text-[#A09F9A] shrink-0 mr-1">
+                  <div className="pt-5 border-t border-[#E5E2DC]/60 dark:border-white/10 space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-mono-tabular text-[#5C5B57] dark:text-[#A09F9A] shrink-0 mr-1">
                     Quick Short-Forms:
                   </span>
                   {QUICK_SEARCH_SHORTCUTS.map((chip) => {
@@ -644,7 +698,7 @@ const PastPapersPage: React.FC = () => {
                             setDebouncedQuery(chip.query);
                           }
                         }}
-                        className={`px-3 py-1 rounded-full text-[11px] font-mono-tabular shrink-0 border transition-[border-color] ${
+                        className={`px-3 py-1.5 rounded-full text-xs font-mono-tabular shrink-0 border transition-[border-color] ${
                           isSelected
                             ? 'bg-[#896ABD] text-white border-[#896ABD] shadow-sm'
                             : 'bg-[#FAF9F6] dark:bg-white/[0.04] border-[#E5E2DC] dark:border-white/10 text-[#5C5B57] dark:text-[#C4C3BE] hover:border-[#896ABD] hover:text-[#896ABD] dark:hover:border-[#A855F7] dark:hover:text-[#C084FC]'
@@ -656,16 +710,16 @@ const PastPapersPage: React.FC = () => {
                   })}
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
                   {/* Semester Select */}
-                  <div className="space-y-1">
-                    <label className="block text-[10px] font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#A09F9A]">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#A09F9A]">
                       Semester
                     </label>
                     <select
                       value={selectedSemester}
                       onChange={(e) => setSelectedSemester(e.target.value)}
-                      className="w-full px-3 py-2.5 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C] text-xs font-mono-tabular focus:outline-none focus:border-[#896ABD]"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0B0B0F] text-sm focus:outline-none focus:border-[#896ABD]"
                     >
                       <option value="ALL">All Semesters (Sem 1–8)</option>
                       {['1', '2', '3', '4', '5', '6', '7', '8'].map((s) => (
@@ -677,14 +731,14 @@ const PastPapersPage: React.FC = () => {
                   </div>
 
                   {/* Academic Year Select */}
-                  <div className="space-y-1">
-                    <label className="block text-[10px] font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#A09F9A]">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#A09F9A]">
                       Examination Year
                     </label>
                     <select
                       value={selectedYear}
                       onChange={(e) => setSelectedYear(e.target.value)}
-                      className="w-full px-3 py-2.5 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C] text-xs font-mono-tabular focus:outline-none focus:border-[#896ABD]"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0B0B0F] text-sm focus:outline-none focus:border-[#896ABD]"
                     >
                       <option value="ALL">All Years (2020–2026)</option>
                       {availableYears.map((y) => (
@@ -696,14 +750,14 @@ const PastPapersPage: React.FC = () => {
                   </div>
 
                   {/* Course / Subject Select */}
-                  <div className="space-y-1">
-                    <label className="block text-[10px] font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#A09F9A]">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#A09F9A]">
                       Course / Subject ({filteredCourses.length})
                     </label>
                     <select
                       value={selectedCourseCode}
                       onChange={(e) => setSelectedCourseCode(e.target.value)}
-                      className="w-full px-3 py-2.5 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C] text-xs font-mono-tabular focus:outline-none focus:border-[#896ABD]"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0B0B0F] text-sm focus:outline-none focus:border-[#896ABD]"
                     >
                       <option value="ALL">All Courses ({filteredCourses.length})</option>
                       {filteredCourses.map((c) => (
@@ -715,15 +769,15 @@ const PastPapersPage: React.FC = () => {
                   </div>
 
                   {/* Sort Order */}
-                  <div className="space-y-1">
-                    <label className="block text-[10px] font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#A09F9A] flex items-center gap-1">
-                      <ArrowUpDown className="w-3 h-3" />
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#A09F9A] flex items-center gap-1">
+                      <ArrowUpDown className="w-3.5 h-3.5" />
                       <span>Sort Results</span>
                     </label>
                     <select
                       value={sortBy}
                       onChange={(e) => setSortBy(e.target.value)}
-                      className="w-full px-3 py-2.5 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C] text-xs font-mono-tabular focus:outline-none focus:border-[#896ABD]"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0B0B0F] text-sm focus:outline-none focus:border-[#896ABD]"
                     >
                       <option value="newest">Newest Session First (2026 → 2020)</option>
                       <option value="oldest">Oldest Session First (2020 → 2026)</option>
@@ -740,8 +794,8 @@ const PastPapersPage: React.FC = () => {
           </div>
         </section>
 
-        {/* Interactive 2020–2026 Session Coverage Strip */}
-        {(() => {
+        {/* Interactive Session Coverage Strip (shown when More Filters is open or a Year is filtered to keep default view uncluttered) */}
+        {(showAdvancedFilters || selectedYear !== 'ALL') && (() => {
           const stripYears: number[] =
             Array.isArray(archiveStats?.years) && archiveStats.years.length > 0
               ? archiveStats.years.map(Number)
@@ -753,16 +807,16 @@ const PastPapersPage: React.FC = () => {
           );
 
           return (
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white/85 dark:bg-[#111117]/85 backdrop-blur-md border border-[#E5E2DC]/80 dark:border-white/10">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-4 rounded-2xl bg-white/95 dark:bg-[#13131A]/95 border border-[#E5E2DC] dark:border-white/10 shadow-sm">
               <div className="flex items-center gap-2 shrink-0">
-                <span className="text-[11px] font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#A09F9A]">
-                  Archive Coverage Timeline
+                <span className="text-xs font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#A09F9A] font-medium">
+                  Filter by Year
                 </span>
                 {selectedYear !== 'ALL' && (
                   <button
                     type="button"
                     onClick={() => setSelectedYear('ALL')}
-                    className="px-2 py-0.5 rounded-md text-[10px] font-mono-tabular bg-[#E04F33]/10 text-[#E04F33] border border-[#E04F33]/30 hover:bg-[#E04F33]/20 transition-colors"
+                    className="px-2.5 py-1 rounded-md text-xs font-mono-tabular bg-[#E04F33]/10 text-[#E04F33] border border-[#E04F33]/30 hover:bg-[#E04F33]/20 transition-colors"
                   >
                     All Years ×
                   </button>
@@ -785,7 +839,7 @@ const PastPapersPage: React.FC = () => {
                       className={`group flex flex-col justify-between px-2.5 py-2 rounded-lg border text-left transition-[border-color] ${
                         active
                           ? 'border-[#E04F33] bg-[#E04F33]/10 dark:bg-[#E04F33]/15'
-                          : 'border-[#E5E2DC] dark:border-white/10 bg-[#FAF9F6]/70 dark:bg-white/[0.02] hover:border-[#896ABD]'
+                          : 'border-[#E5E2DC] dark:border-white/10 bg-[#FAF9F6] dark:bg-white/[0.03] hover:border-[#896ABD]'
                       }`}
                     >
                       <div className="flex items-baseline justify-between gap-1">
@@ -798,20 +852,20 @@ const PastPapersPage: React.FC = () => {
                         >
                           {yr}
                         </span>
-                        <span className="text-[10px] font-mono-tabular text-[#5C5B57] dark:text-[#A09F9A]">
+                        <span className="text-[11px] font-mono-tabular text-[#5C5B57] dark:text-[#A09F9A]">
                           {archiveStats ? count : '—'}
                         </span>
                       </div>
                       <div className="mt-1.5 h-1.5 w-full rounded-full bg-[#E5E2DC]/70 dark:bg-white/10 overflow-hidden">
                         <div
-                          className={`h-full rounded-full transition-all duration-300 ${
+                          className={`h-full w-full origin-left rounded-full transition-[transform,background-color] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] ${
                             active
                               ? 'bg-[#E04F33]'
                               : count > 0
                               ? 'bg-[#896ABD]/80 group-hover:bg-[#E04F33]/80'
                               : 'bg-transparent'
                           }`}
-                          style={{ width: `${barPct}%` }}
+                          style={{ transform: `scaleX(${Math.max(0, Math.min(1, Number(barPct || 0) / 100))})` }}
                         />
                       </div>
                     </button>
@@ -823,10 +877,10 @@ const PastPapersPage: React.FC = () => {
         })()}
 
         {/* Results Status Bar with Active Tier-2 Chips */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 py-3 rounded-xl bg-white/80 dark:bg-[#111117]/80 backdrop-blur-md border border-[#E5E2DC]/80 dark:border-white/10">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-5 py-3.5 rounded-xl bg-white/95 dark:bg-[#13131A]/95 border border-[#E5E2DC] dark:border-white/10">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="inline-flex items-center gap-1.5 text-xs font-mono-tabular text-[#5C5B57] dark:text-[#C4C3BE] mr-1">
-              <SlidersHorizontal className="w-3.5 h-3.5 text-[#896ABD] dark:text-[#A855F7]" />
+            <span className="inline-flex items-center gap-2 text-sm text-[#5C5B57] dark:text-[#C4C3BE] mr-1">
+              <SlidersHorizontal className="w-4 h-4 text-[#896ABD] dark:text-[#A855F7]" />
               <span>
                 Showing{' '}
                 <strong className="text-[#0A0A0C] dark:text-[#F5F4F0]">
@@ -895,9 +949,27 @@ const PastPapersPage: React.FC = () => {
           </span>
         </div>
 
-        {/* Papers Grid — Spacious 3-Column Layout with Large Course Cards */}
+        {/* Error Banner with Retry */}
+        {!loading && loadError && (
+          <div className="px-4 py-3.5 rounded-xl bg-rose-50 border border-rose-300 text-rose-800 text-xs flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 font-medium">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-700" />
+              <span>{loadError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReloadNonce((n) => n + 1)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-700 text-white font-semibold hover:bg-rose-800 transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Retry</span>
+            </button>
+          </div>
+        )}
+
+        {/* Papers Grid — Full-Width Responsive Multi-Column Layout */}
         {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
             {Array.from({ length: 6 }).map((_, idx) => (
               <div
                 key={idx}
@@ -932,7 +1004,7 @@ const PastPapersPage: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-8">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
               {papers.map((paper) => (
                 <PaperCard
                   key={paper.id}
@@ -1067,7 +1139,7 @@ const PastPapersPage: React.FC = () => {
           fileName={previewPaper.file_name || `${previewPaper.course_code}.pdf`}
           filePath={previewPaper.file_path || ''}
           paperId={previewPaper.id}
-          token={localStorage.getItem('token') || ''}
+          token={typeof window !== 'undefined' ? localStorage.getItem('token') || '' : ''}
           courseCode={previewPaper.course_code}
           onSelectCourse={(code) => {
             setPreviewPaper(null);

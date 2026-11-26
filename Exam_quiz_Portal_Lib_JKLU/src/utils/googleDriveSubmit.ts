@@ -10,6 +10,144 @@
  *    environment, students submit real verified external links via Direct Link mode.
  */
 
+export const MAX_FACULTY_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB limit for faculty notes & assignments
+export const FACULTY_ALLOWED_ACCEPT =
+  '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+const FACULTY_ALLOWED_EXTENSIONS = new Set(['pdf', 'doc', 'docx']);
+const FACULTY_ALLOWED_MIMES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+]);
+
+export interface FacultyDriveUploadResult {
+  url: string;
+  drive_file_id: string;
+  file_name: string;
+  file_size: number;
+  file_sha256: string;
+  shared_anyone: boolean;
+}
+
+export function validateFacultyResourceFile(file: File): { valid: boolean; error?: string } {
+  const ext = String(file.name.split('.').pop() || '').toLowerCase();
+  const mime = String(file.type || '').toLowerCase();
+  const isAllowedType =
+    FACULTY_ALLOWED_EXTENSIONS.has(ext) || (mime !== '' && FACULTY_ALLOWED_MIMES.has(mime));
+
+  if (!isAllowedType) {
+    return {
+      valid: false,
+      error: 'Only PDF, DOC, or DOCX files are supported for direct upload (or paste any https:// link instead).',
+    };
+  }
+  if (file.size <= 0) {
+    return { valid: false, error: 'Selected file is empty.' };
+  }
+  if (file.size > MAX_FACULTY_UPLOAD_BYTES) {
+    const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+    return {
+      valid: false,
+      error: `File is ${sizeMb} MB, which exceeds the 10 MB limit. Compress the file or paste a direct link instead.`,
+    };
+  }
+  return { valid: true };
+}
+
+/**
+ * Uploads a faculty Note or Assignment sheet (PDF / DOC / DOCX, <= 10 MB) directly from the
+ * browser to the professor's Google Drive and enables unlisted link-viewer access so all
+ * enrolled students (including Microsoft 365 @jklu.edu.in accounts) can view it immediately.
+ */
+export async function uploadFacultyResourceToGoogleDrive(params: {
+  file: File;
+  courseCode: string;
+  category: 'NOTES' | 'ASSIGNMENT';
+  onProgress?: (stage: string, pct: number) => void;
+}): Promise<FacultyDriveUploadResult> {
+  const { file, courseCode, category, onProgress } = params;
+  const check = validateFacultyResourceFile(file);
+  if (!check.valid) {
+    throw new Error(check.error || 'Invalid file.');
+  }
+
+  const clientId = (process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '').trim();
+  if (!clientId) {
+    throw new Error(
+      'Google Drive OAuth (NEXT_PUBLIC_GOOGLE_CLIENT_ID) is not configured. Please paste a direct https:// link instead.'
+    );
+  }
+
+  onProgress?.('Validating & computing SHA-256 fingerprint...', 15);
+  const fileSha256 = await computeFileSha256(file);
+
+  onProgress?.('Connecting to your Google Drive...', 30);
+  const accessToken = await requestGoogleDriveAccessToken(clientId);
+
+  onProgress?.(`Uploading "${file.name}" to Google Drive...`, 55);
+  const tag = category === 'NOTES' ? 'Notes' : 'Assignment';
+  const metadata = {
+    name: `[${courseCode}] [${tag}] ${file.name}`,
+    mimeType: file.type || 'application/octet-stream',
+    description: `Learn JKLU 2.0 ${tag} for ${courseCode} (SHA-256: ${fileSha256})`,
+  };
+
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', file);
+
+  const uploadRes = await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,modifiedTime',
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form,
+    }
+  );
+
+  if (!uploadRes.ok) {
+    throw new Error(`Google Drive upload failed (${uploadRes.status})`);
+  }
+  const uploaded = await uploadRes.json();
+  const fileId = String(uploaded.id);
+  const webViewLink =
+    uploaded.webViewLink || `https://drive.google.com/file/d/${fileId}/view?usp=drivesdk`;
+
+  onProgress?.('Enabling student viewing link...', 82);
+  let sharedAnyone = false;
+  try {
+    const permRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          role: 'reader',
+          type: 'anyone',
+          allowFileDiscovery: false,
+        }),
+      }
+    );
+    sharedAnyone = permRes.ok;
+  } catch {
+    sharedAnyone = false;
+  }
+
+  onProgress?.('Uploaded to Google Drive!', 100);
+  return {
+    url: webViewLink,
+    drive_file_id: fileId,
+    file_name: file.name,
+    file_size: file.size,
+    file_sha256: fileSha256,
+    shared_anyone: sharedAnyone,
+  };
+}
+
 export interface DriveUploadResult {
   submission_url: string;
   drive_file_id: string;
@@ -72,8 +210,11 @@ export function validateSubmissionLink(url: string): {
       provider: 'Google Drive / Docs',
       warning: fileId
         ? undefined
-        : 'Tip: Use a specific Google Drive file share link (/file/d/<ID>/view) and ensure sharing is enabled for @jklu.edu.in.',
+        : 'Tip: Use a specific Google Drive file share link (/file/d/<ID>/view) and set access to "Anyone with the link (Viewer)" so @jklu.edu.in faculty can preview it.',
     };
+  }
+  if (/onedrive\.live\.com|1drv\.ms|sharepoint\.com/i.test(clean)) {
+    return { valid: true, provider: 'Microsoft OneDrive / SharePoint' };
   }
   if (/github\.com|gitlab\.com/i.test(clean)) {
     return { valid: true, provider: 'GitHub / GitLab Repository' };
@@ -90,7 +231,80 @@ export function validateSubmissionLink(url: string): {
   return { valid: true, provider: 'External Web Link' };
 }
 
+const GSI_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
+const GSI_LOAD_TIMEOUT_MS = 10000;
+let gsiLoadPromise: Promise<void> | null = null;
+
+/**
+ * Lazily injects the Google Identity Services script (`gsi/client`) once and waits
+ * until `window.google.accounts.oauth2` is available. Resets on error or timeout
+ * so subsequent user attempts can retry cleanly.
+ */
+export function ensureGoogleIdentityScript(): Promise<void> {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return Promise.reject(new Error('Google Identity Services requires a browser environment.'));
+  }
+  const w = window as any;
+  if (w.google?.accounts?.oauth2) {
+    return Promise.resolve();
+  }
+  if (gsiLoadPromise) {
+    return gsiLoadPromise;
+  }
+
+  gsiLoadPromise = new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finishSuccess = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      if (w.google?.accounts?.oauth2) {
+        resolve();
+      } else {
+        gsiLoadPromise = null;
+        reject(new Error('Google Identity Services loaded without OAuth2 support.'));
+      }
+    };
+    const finishError = (msg: string, scriptEl?: HTMLScriptElement) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      gsiLoadPromise = null;
+      if (scriptEl && scriptEl.parentNode) {
+        scriptEl.parentNode.removeChild(scriptEl);
+      }
+      reject(new Error(msg));
+    };
+
+    const existing = document.querySelector<HTMLScriptElement>(
+      `script[src="${GSI_SCRIPT_SRC}"]`
+    );
+    const script = existing || document.createElement('script');
+
+    const timer = window.setTimeout(() => {
+      finishError('Timed out loading Google Identity Services script.', existing ? undefined : script);
+    }, GSI_LOAD_TIMEOUT_MS);
+
+    script.addEventListener('load', finishSuccess, { once: true });
+    script.addEventListener(
+      'error',
+      () => finishError('Failed to load Google Identity Services script.', script),
+      { once: true }
+    );
+
+    if (!existing) {
+      script.src = GSI_SCRIPT_SRC;
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+  });
+
+  return gsiLoadPromise;
+}
+
 async function requestGoogleDriveAccessToken(clientId: string): Promise<string> {
+  await ensureGoogleIdentityScript();
   return new Promise((resolve, reject) => {
     const w = window as any;
     if (!w.google?.accounts?.oauth2) {
@@ -167,27 +381,72 @@ export async function uploadFileToStudentGoogleDrive(params: {
   const webViewLink =
     uploaded.webViewLink || `https://drive.google.com/file/d/${fileId}/view?usp=drivesdk`;
 
-  onProgress?.(`Granting reader access to ${shareEmails.length} Course Professor(s) & TA(s)...`, 80);
-  for (const email of shareEmails) {
-    if (!email) continue;
-    await fetch(
-      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions?sendNotificationEmail=false`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          role: 'reader',
-          type: 'user',
-          emailAddress: email,
-        }),
+  const cleanEmails = shareEmails.map((e) => String(e || '').trim()).filter(Boolean);
+  const grantedEmails: string[] = [];
+  let needsAnyoneFallback = cleanEmails.length === 0;
+
+  onProgress?.(`Granting reader access to ${cleanEmails.length} Course Professor(s) & TA(s)...`, 80);
+  for (const email of cleanEmails) {
+    try {
+      const permRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions?sendNotificationEmail=false`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            role: 'reader',
+            type: 'user',
+            emailAddress: email,
+          }),
+        }
+      );
+      if (permRes.ok) {
+        grantedEmails.push(email);
+      } else {
+        // Non-Google emails (such as Microsoft 365 @jklu.edu.in accounts) fail direct sharing with sendNotificationEmail=false
+        needsAnyoneFallback = true;
       }
-    ).catch(() => {});
+    } catch {
+      needsAnyoneFallback = true;
+    }
   }
 
-  onProgress?.('Saved in your Google Drive & shared with Faculty!', 100);
+  let linkAnyoneGranted = false;
+  if (needsAnyoneFallback) {
+    try {
+      const anyoneRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            role: 'reader',
+            type: 'anyone',
+            allowFileDiscovery: false,
+          }),
+        }
+      );
+      linkAnyoneGranted = anyoneRes.ok;
+    } catch {
+      linkAnyoneGranted = false;
+    }
+  }
+
+  const sharedWithProf =
+    (cleanEmails.length > 0 && grantedEmails.length === cleanEmails.length) || linkAnyoneGranted;
+
+  onProgress?.(
+    sharedWithProf
+      ? 'Saved in your Google Drive & readable by Faculty!'
+      : 'Saved in Google Drive (check link access settings if preview is restricted).',
+    100
+  );
   return {
     submission_url: webViewLink,
     drive_file_id: fileId,
@@ -196,7 +455,7 @@ export async function uploadFileToStudentGoogleDrive(params: {
     file_sha256: fileSha256,
     drive_modified_time: uploaded.modifiedTime || new Date().toISOString(),
     upload_mode: 'GOOGLE_DRIVE_AUTO',
-    shared_with_emails: shareEmails,
-    shared_with_prof: true,
+    shared_with_emails: grantedEmails,
+    shared_with_prof: sharedWithProf,
   };
 }

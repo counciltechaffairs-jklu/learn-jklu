@@ -3,10 +3,10 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Mail, Lock, User, Eye, EyeOff, ArrowLeft } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
-import ThemeSwitcher from '@/components/layout/ThemeSwitcher';
 import JKLULogo from '@/components/layout/JKLULogo';
 import CrystalizedBall from '@/components/layout/CrystalizedBall';
 import RobotCheck, { type CaptchaPayload } from '@/components/auth/RobotCheck';
+import { DimensionalCornerMarks } from '@/components/dimensional/DimensionalKit';
 import { getPostLoginDestination, sanitizeNextPath } from '@/utils/postLoginRedirect';
 
 const Register: React.FC = () => {
@@ -33,7 +33,8 @@ const Register: React.FC = () => {
     e.preventDefault();
     setError('');
 
-    if (!email.endsWith('@jklu.edu.in')) {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail.endsWith('@jklu.edu.in')) {
       setError('Please use your @jklu.edu.in university email address.');
       return;
     }
@@ -52,7 +53,7 @@ const Register: React.FC = () => {
 
     setLoading(true);
     try {
-      await register(email.trim(), name.trim(), password, confirmPassword, captcha, {
+      await register(normalizedEmail, name.trim(), password, confirmPassword, captcha, {
         department,
         year,
         roll_no: rollNo.trim().toUpperCase() || undefined,
@@ -107,17 +108,21 @@ const Register: React.FC = () => {
             <span>Back to Home</span>
           </button>
         </div>
-        <ThemeSwitcher />
       </div>
 
-      <div className="relative z-10 max-w-md w-full mx-auto bg-white/95 dark:bg-[#111117]/95 backdrop-blur-md border border-[#E5E2DC] dark:border-white/15 shadow-xl rounded-xl p-6 sm:p-8 space-y-6">
+      <div className="relative z-10 modal-panel-enter max-w-md w-full mx-auto bg-white/95 dark:bg-[#111117]/95 backdrop-blur-md border border-[#E5E2DC] dark:border-white/15 shadow-[var(--shadow-elevated)] rounded-2xl p-5 sm:p-8 space-y-6">
+        <DimensionalCornerMarks />
+        <div className="flex items-center justify-between text-[9.5px] font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#8E8D88] border-b border-[#E5E2DC]/80 dark:border-white/10 pb-2">
+          <span>DWG NO. JKLU-AUTH-02</span>
+          <span>REV 2.0 · SCALE 1:1</span>
+        </div>
         <div className="space-y-1.5">
           <span className="font-mono-tabular text-[11px] uppercase tracking-wider text-[#4F46E5] dark:text-[#A5B4FC]">
             JKLU · STUDENT REGISTRATION
           </span>
           <h1 className="text-2xl font-semibold tracking-tight">Create Student Account</h1>
           <p className="text-xs text-[#5C5B57] dark:text-[#94938E]">
-            Register with your @jklu.edu.in email to submit past question papers and participate in Coding Hour.
+            Register with your @jklu.edu.in email to join your course classrooms, track assignments, and contribute past question papers.
           </p>
         </div>
 
@@ -162,7 +167,7 @@ const Register: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
             <div className="space-y-1">
               <label className="block text-[10px] font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">
                 Programme
@@ -195,7 +200,7 @@ const Register: React.FC = () => {
                 ))}
               </select>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1 col-span-2 sm:col-span-1">
               <label className="block text-[10px] font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">
                 Roll No
               </label>
@@ -254,15 +259,20 @@ const Register: React.FC = () => {
           </button>
         </form>
 
-        <p className="text-center text-xs text-[#5C5B57] dark:text-[#94938E]">
-          Already registered?{' '}
-          <Link
-            to={nextParam ? `/login?next=${encodeURIComponent(nextParam)}` : '/login'}
-            className="text-[#0A0A0C] dark:text-white font-medium underline"
-          >
-            Sign in
-          </Link>
-        </p>
+        <div className="pt-3 border-t border-[#E5E2DC] dark:border-[#232329] space-y-2">
+          <p className="text-center text-xs text-[#5C5B57] dark:text-[#94938E]">
+            Already registered?{' '}
+            <Link
+              to={nextParam ? `/login?next=${encodeURIComponent(nextParam)}` : '/login'}
+              className="text-[#0A0A0C] dark:text-white font-medium underline"
+            >
+              Sign in
+            </Link>
+          </p>
+          <div className="text-center font-mono-tabular text-[9.5px] uppercase tracking-wider text-[#5C5B57] dark:text-[#8E8D88]">
+            SCALE 1:1 · @JKLU.EDU.IN
+          </div>
+        </div>
       </div>
 
       <div className="relative z-10 text-center text-xs font-mono-tabular text-[#5C5B57] dark:text-[#94938E]">

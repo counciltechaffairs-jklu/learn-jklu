@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS course_offerings (
   batch_year TEXT DEFAULT '2024-2028',           -- Target batch for auto-enrollment
   semester TEXT DEFAULT '3',
   section TEXT DEFAULT 'ALL',
+  sections JSONB NOT NULL DEFAULT '["Sec A"]'::jsonb,
   credits INTEGER DEFAULT 4,
   join_code TEXT UNIQUE NOT NULL,
   auto_enroll BOOLEAN DEFAULT TRUE,
@@ -200,6 +201,7 @@ CREATE TABLE IF NOT EXISTS course_instructors (
   offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
   professor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role_label TEXT DEFAULT 'Course Coordinator', -- 'Course Coordinator' | 'Co-Instructor' | 'Lab Faculty'
+  assigned_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(offering_id, professor_id)
 );
@@ -219,6 +221,7 @@ CREATE TABLE IF NOT EXISTS course_tas (
   lab_hours TEXT,                                -- e.g. 'Tue & Thu, 4:00 PM - 5:30 PM (Computer Lab 3)'
   can_grade BOOLEAN DEFAULT TRUE,
   can_announce BOOLEAN DEFAULT TRUE,
+  assigned_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(offering_id, public_email)
 );
@@ -256,6 +259,7 @@ CREATE TABLE IF NOT EXISTS classroom_announcements (
   attachment_urls JSONB DEFAULT '[]'::jsonb,     -- Array of { label, url, type } (Drive links only)
   is_pinned BOOLEAN DEFAULT FALSE,
   allow_comments BOOLEAN DEFAULT TRUE,
+  target_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -288,6 +292,7 @@ CREATE TABLE IF NOT EXISTS classroom_assignments (
   due_at TIMESTAMPTZ,
   allow_late BOOLEAN DEFAULT TRUE,
   max_marks NUMERIC(6,2) DEFAULT 100,
+  target_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -299,15 +304,23 @@ CREATE TABLE IF NOT EXISTS assignment_submissions (
   student_name TEXT,
   student_email TEXT,
   student_roll_no TEXT,
-  submission_url TEXT NOT NULL,                  -- Google Drive webViewLink or direct GitHub/Colab/Figma link
+  submission_url TEXT,                           -- Google Drive webViewLink, direct link, or native upload path
   drive_file_id TEXT,                            -- Drive File ID for split-screen iframe preview
   file_name TEXT,
-  upload_mode TEXT DEFAULT 'GOOGLE_DRIVE_AUTO',  -- 'GOOGLE_DRIVE_AUTO' | 'DIRECT_LINK'
+  file_mime TEXT,
+  file_data BYTEA,
+  file_size INTEGER,
+  upload_mode TEXT DEFAULT 'GOOGLE_DRIVE_AUTO',  -- 'GOOGLE_DRIVE_AUTO' | 'DIRECT_LINK' | 'NATIVE_UPLOAD'
   submission_notes TEXT,
   is_late BOOLEAN DEFAULT FALSE,
+  late_minutes INTEGER NOT NULL DEFAULT 0,
+  late_penalty_applied NUMERIC(6,2) NOT NULL DEFAULT 0,
   shared_with_prof BOOLEAN DEFAULT TRUE,         -- Auto-shared with Professor & TA @jklu.edu.in emails
   file_sha256 TEXT,                              -- Client-computed SHA-256 fingerprint for tamper detection
   drive_modified_time TIMESTAMPTZ,               -- Google Drive modifiedTime snapshot at submission
+  rubric_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
+  group_id INTEGER,
+  version_count INTEGER NOT NULL DEFAULT 1,
   marks_obtained NUMERIC(6,2),
   feedback TEXT,
   graded_by_name TEXT,
@@ -316,6 +329,306 @@ CREATE TABLE IF NOT EXISTS assignment_submissions (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(assignment_id, student_id),
   CHECK (marks_obtained IS NULL OR marks_obtained >= 0)
+);
+
+-- Additional LMS Feature Tables (Notifications, Gradebook, Groups, Modules, Attendance, Requests, Quizzes)
+CREATE TABLE IF NOT EXISTS submission_versions (
+  id SERIAL PRIMARY KEY,
+  submission_id INTEGER NOT NULL REFERENCES assignment_submissions(id) ON DELETE CASCADE,
+  version_no INTEGER NOT NULL DEFAULT 1,
+  submission_url TEXT,
+  submission_notes TEXT,
+  file_name TEXT,
+  file_mime TEXT,
+  file_size INTEGER,
+  submitted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS assignment_groups (
+  id SERIAL PRIMARY KEY,
+  assignment_id INTEGER NOT NULL REFERENCES classroom_assignments(id) ON DELETE CASCADE,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  is_locked BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS assignment_group_members (
+  id SERIAL PRIMARY KEY,
+  group_id INTEGER NOT NULL REFERENCES assignment_groups(id) ON DELETE CASCADE,
+  assignment_id INTEGER NOT NULL REFERENCES classroom_assignments(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  student_email TEXT,
+  student_name TEXT,
+  role TEXT NOT NULL DEFAULT 'member',
+  joined_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (assignment_id, student_id)
+);
+
+CREATE TABLE IF NOT EXISTS reeval_requests (
+  id SERIAL PRIMARY KEY,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  assignment_id INTEGER NOT NULL REFERENCES classroom_assignments(id) ON DELETE CASCADE,
+  submission_id INTEGER NOT NULL REFERENCES assignment_submissions(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewer_name TEXT,
+  reviewer_note TEXT,
+  old_marks NUMERIC(6,2),
+  new_marks NUMERIC(6,2),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  reviewed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS classroom_notifications (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  offering_id INTEGER REFERENCES course_offerings(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT,
+  link_path TEXT,
+  is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS email_notification_logs (
+  id SERIAL PRIMARY KEY,
+  offering_id INTEGER REFERENCES course_offerings(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL,
+  recipient_email TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  status TEXT NOT NULL,
+  provider_id TEXT,
+  error_detail TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS submission_messages (
+  id SERIAL PRIMARY KEY,
+  submission_id INTEGER NOT NULL REFERENCES assignment_submissions(id) ON DELETE CASCADE,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  sender_name TEXT NOT NULL,
+  sender_role TEXT NOT NULL,
+  message TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS announcement_reads (
+  announcement_id INTEGER NOT NULL REFERENCES classroom_announcements(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  read_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (announcement_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS classroom_polls (
+  id SERIAL PRIMARY KEY,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  author_name TEXT NOT NULL,
+  question TEXT NOT NULL,
+  options_json JSONB NOT NULL,
+  target_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
+  is_closed BOOLEAN NOT NULL DEFAULT FALSE,
+  closes_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS classroom_poll_votes (
+  poll_id INTEGER NOT NULL REFERENCES classroom_polls(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  option_index INTEGER NOT NULL,
+  voted_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (poll_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS office_hour_slots (
+  id SERIAL PRIMARY KEY,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  professor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  professor_name TEXT NOT NULL,
+  location TEXT,
+  starts_at TIMESTAMPTZ NOT NULL,
+  ends_at TIMESTAMPTZ NOT NULL,
+  max_bookings INTEGER NOT NULL DEFAULT 1,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS office_hour_bookings (
+  id SERIAL PRIMARY KEY,
+  slot_id INTEGER NOT NULL REFERENCES office_hour_slots(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  student_name TEXT,
+  student_email TEXT,
+  topic TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (slot_id, student_id)
+);
+
+CREATE TABLE IF NOT EXISTS course_modules (
+  id SERIAL PRIMARY KEY,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  target_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
+  unlock_at TIMESTAMPTZ,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS course_module_items (
+  id SERIAL PRIMARY KEY,
+  module_id INTEGER NOT NULL REFERENCES course_modules(id) ON DELETE CASCADE,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  item_type TEXT NOT NULL DEFAULT 'LINK',
+  resource_url TEXT,
+  file_name TEXT,
+  file_mime TEXT,
+  file_data BYTEA,
+  file_size INTEGER,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS module_item_progress (
+  item_id INTEGER NOT NULL REFERENCES course_module_items(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  bookmarked BOOLEAN NOT NULL DEFAULT FALSE,
+  completed BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (item_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS attendance_sessions (
+  id SERIAL PRIMARY KEY,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  section TEXT NOT NULL DEFAULT 'Sec A',
+  session_date DATE NOT NULL,
+  topic TEXT,
+  checkin_pin TEXT,
+  pin_expires_at TIMESTAMPTZ,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS attendance_records (
+  session_id INTEGER NOT NULL REFERENCES attendance_sessions(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  enrollment_id INTEGER REFERENCES course_enrollments(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'PRESENT',
+  marked_via TEXT NOT NULL DEFAULT 'FACULTY',
+  marked_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (session_id, student_id)
+);
+
+CREATE TABLE IF NOT EXISTS od_leave_requests (
+  id SERIAL PRIMARY KEY,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  student_name TEXT,
+  student_email TEXT,
+  section TEXT,
+  leave_type TEXT NOT NULL DEFAULT 'OD',
+  from_date DATE NOT NULL,
+  to_date DATE NOT NULL,
+  reason TEXT NOT NULL,
+  proof_url TEXT,
+  proof_file_name TEXT,
+  proof_file_mime TEXT,
+  proof_file_data BYTEA,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewer_note TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  reviewed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS classroom_requests (
+  id SERIAL PRIMARY KEY,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  student_name TEXT,
+  student_email TEXT,
+  request_type TEXT NOT NULL,
+  current_section TEXT,
+  requested_section TEXT,
+  reason TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewer_note TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  reviewed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS question_bank_items (
+  id SERIAL PRIMARY KEY,
+  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  course_code TEXT,
+  topic TEXT,
+  question_type TEXT NOT NULL DEFAULT 'MCQ',
+  prompt TEXT NOT NULL,
+  options_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  correct_answers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  marks NUMERIC(6,2) NOT NULL DEFAULT 1,
+  explanation TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS classroom_quizzes (
+  id SERIAL PRIMARY KEY,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  assignment_id INTEGER REFERENCES classroom_assignments(id) ON DELETE SET NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  target_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
+  duration_minutes INTEGER NOT NULL DEFAULT 15,
+  randomize_questions BOOLEAN NOT NULL DEFAULT TRUE,
+  randomize_options BOOLEAN NOT NULL DEFAULT TRUE,
+  show_solutions_after BOOLEAN NOT NULL DEFAULT TRUE,
+  questions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  max_marks NUMERIC(6,2) NOT NULL DEFAULT 10,
+  starts_at TIMESTAMPTZ,
+  ends_at TIMESTAMPTZ,
+  is_published BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS classroom_quiz_attempts (
+  id SERIAL PRIMARY KEY,
+  quiz_id INTEGER NOT NULL REFERENCES classroom_quizzes(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  started_at TIMESTAMPTZ DEFAULT NOW(),
+  submitted_at TIMESTAMPTZ,
+  answers_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  score NUMERIC(6,2),
+  max_marks NUMERIC(6,2),
+  status TEXT NOT NULL DEFAULT 'IN_PROGRESS',
+  UNIQUE (quiz_id, student_id)
+);
+
+CREATE TABLE IF NOT EXISTS grading_audit_logs (
+  id SERIAL PRIMARY KEY,
+  offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+  assignment_id INTEGER REFERENCES classroom_assignments(id) ON DELETE SET NULL,
+  submission_id INTEGER REFERENCES assignment_submissions(id) ON DELETE SET NULL,
+  student_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  grader_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  grader_name TEXT,
+  grader_role TEXT,
+  old_marks NUMERIC(6,2),
+  new_marks NUMERIC(6,2),
+  source TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Additional indexes for Faculty, Offerings, Classroom & Grading hot paths

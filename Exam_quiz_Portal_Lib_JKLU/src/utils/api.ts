@@ -161,14 +161,27 @@ apiClient.interceptors.response.use(
       }
     }
 
-    const rawDetail = (error.response?.data as any)?.detail;
+    let rawDetail = (error.response?.data as any)?.detail;
+    if (!rawDetail && typeof Blob !== 'undefined' && error.response?.data instanceof Blob) {
+      try {
+        const text = await error.response.data.text();
+        const parsed = JSON.parse(text);
+        rawDetail = parsed?.detail || parsed?.message;
+      } catch {}
+    }
+
     const message =
       !error.response || (status !== undefined && status >= 500)
         ? 'Error'
         : sanitizeErrorMessage(rawDetail ?? error.message, 'Error');
-    const apiErr = new Error(message) as Error & { status?: number; code?: string };
+    const apiErr = new Error(message) as Error & {
+      status?: number;
+      code?: string;
+      response?: typeof error.response;
+    };
     apiErr.status = status;
     apiErr.code = error.code;
+    apiErr.response = error.response;
     return Promise.reject(apiErr);
   }
 );
@@ -222,9 +235,20 @@ export const API = {
     return apiClient.get('/me');
   },
 
-  // Profile endpoints
-  updateProfile: (data: { roll_no?: string; student_id?: string }) => {
+  // Profile & password lifecycle endpoints
+  updateProfile: (data: {
+    name?: string;
+    roll_no?: string;
+    student_id?: string;
+    department?: string;
+    semester?: number | string;
+    year?: string;
+  }) => {
     return apiClient.put('/profile', data);
+  },
+
+  changePassword: (current_password: string, new_password: string) => {
+    return apiClient.post('/change-password', { current_password, new_password });
   },
 
   uploadIdCard: (file: File) => {

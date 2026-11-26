@@ -76,8 +76,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     typeof window !== 'undefined' ? localStorage.getItem('token') : null
   );
   const [loading, setLoading] = useState(true);
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState(false);
 
   const logout = useCallback(() => {
+    API.client.post('/logout').catch(() => {});
     if (typeof window !== 'undefined') {
       localStorage.removeItem('token');
       localStorage.removeItem('idVerified');
@@ -92,6 +94,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     const onExpired = () => {
       setTokenState(null);
       setUser(null);
+      setSessionExpiredNotice(true);
     };
     window.addEventListener('auth-session-expired', onExpired);
     return () => window.removeEventListener('auth-session-expired', onExpired);
@@ -185,6 +188,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
     const userData: User = response.data.user || (await API.getCurrentUser()).data;
     setUser(userData);
+    setSessionExpiredNotice(false);
     syncProfilePhotoCache(userData);
   };
 
@@ -217,5 +221,41 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     loading,
   };
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      {sessionExpiredNotice && (
+        <div
+          role="alert"
+          className="fixed bottom-4 right-4 z-[9999] max-w-sm rounded-2xl border border-[#E04F33]/40 bg-white px-4 py-3 shadow-2xl text-xs text-[#0A0A0C] flex items-center justify-between gap-3"
+        >
+          <div>
+            <div className="font-bold text-[#E04F33]">Session Expired</div>
+            <p className="text-[#353430] mt-0.5">
+              Please sign in again to continue protected actions.
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setSessionExpiredNotice(false);
+                window.location.assign('/login');
+              }}
+              className="px-3 py-1.5 rounded-lg bg-[#0A0A0C] text-white font-semibold hover:bg-[#E04F33] transition-colors"
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => setSessionExpiredNotice(false)}
+              className="px-2 py-1.5 rounded-lg border border-[#DDD8CE] text-[#353430] hover:bg-[#FAF9F6]"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+      {children}
+    </AuthContext.Provider>
+  );
 };

@@ -1,44 +1,37 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   BookOpen,
   MessageSquare,
   FileCheck2,
   Users,
   Award,
-  UploadCloud,
-  Link2,
-  ExternalLink,
   CheckCircle2,
-  Pin,
-  Send,
   Plus,
   Download,
   FileSpreadsheet,
-  Mail,
-  Phone,
-  MapPin,
   ShieldCheck,
   AlertTriangle,
-  UserPlus,
   GraduationCap,
   FileText,
   Copy,
   Check,
-  X,
-  User,
   RefreshCw,
   Clock,
+  Image as ImageIcon,
+  ListChecks,
+  Upload,
 } from 'lucide-react';
-import { API } from '@/utils/api';
+import { classroomApi } from '@/utils/classroomApi';
 import {
   uploadFileToStudentGoogleDrive,
+  uploadFacultyResourceToGoogleDrive,
   validateSubmissionLink,
   isGoogleDriveOAuthConfigured,
 } from '@/utils/googleDriveSubmit';
 import { useAuth } from '@/contexts/AuthContext';
-import { ScrollProgressBar } from '@/components/animations/MotionPrimitives';
+import { ScrollProgressBar, EASE_OUT } from '@/components/animations/MotionPrimitives';
 import GlobalNavbar from '@/components/layout/GlobalNavbar';
 import Footer from '@/components/layout/Footer';
 import { ProgressRing } from '@/components/viz/ProgressRing';
@@ -46,13 +39,34 @@ import { Sparkline } from '@/components/viz/Sparkline';
 import { MetricBarHistogram } from '@/components/viz/MetricBarHistogram';
 import { ConfettiBurst } from '@/components/viz/ConfettiBurst';
 import { CHART_COLORS, usePrefersReducedMotion } from '@/components/viz/chartTokens';
-import { safeExternalUrl } from '@/utils/safeUrl';
+import {
+  ClassroomHomeHub,
+  ClassroomSidebar,
+  COURSE_BANNER_SCRIM_STYLE,
+  COURSE_BANNER_TEXT_SHADOW,
+  getCourseBannerImage,
+  type ClassroomTaskItem,
+} from '@/components/classroom/ClassroomHomeHub';
+import { MyGradesAttendancePanel } from '@/components/classroom/MyGradesAttendancePanel';
+import { GradebookExtrasPanel } from '@/components/classroom/GradebookExtrasPanel';
+import { ModulesResourcesTab } from '@/components/classroom/ModulesResourcesTab';
+import { AttendancePanel } from '@/components/classroom/AttendancePanel';
+import {
+  StudentPreviewBanner,
+  StudentSectionTransferButton,
+} from '@/components/classroom/RequestsAndPreviewControls';
+import { QuizEnginePanel } from '@/components/classroom/QuizEnginePanel';
+import { ExcelMarksSheet } from '@/components/classroom/ExcelMarksSheet';
+import { ClassroomStreamTab } from '@/components/classroom/ClassroomStreamTab';
+import { ClassroomClassworkTab } from '@/components/classroom/ClassroomClassworkTab';
+import { ClassroomPeopleTab } from '@/components/classroom/ClassroomPeopleTab';
+import { ClassroomModals } from '@/components/classroom/ClassroomModals';
 
 const cardSurface =
-  'rounded-2xl border border-[#E5E2DC]/90 dark:border-white/10 bg-white/90 dark:bg-[#111117]/85 backdrop-blur-md shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.3)]';
+  'rounded-2xl border border-[#E5E2DC] dark:border-white/10 bg-white/95 dark:bg-[#13131A]/95 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.3)]';
 
 const inputSurface =
-  'w-full px-3.5 py-2 rounded-xl text-xs bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-white/15 text-[#0A0A0C] dark:text-[#F5F4F0] placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60 focus:outline-none focus:border-[#896ABD] dark:focus:border-[#C084FC] transition-[border-color]';
+  'w-full px-4 py-2.5 rounded-xl text-sm bg-[#FAF9F6] dark:bg-[#0B0B0F] border border-[#E5E2DC] dark:border-white/15 text-[#0A0A0C] dark:text-[#F5F4F0] placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60 focus:outline-none focus:border-[#896ABD] dark:focus:border-[#C084FC] transition-[border-color]';
 
 const ClassroomPage: React.FC = () => {
   const { offeringId } = useParams<{ offeringId?: string }>();
@@ -60,12 +74,18 @@ const ClassroomPage: React.FC = () => {
   const { user } = useAuth();
 
   const [offerings, setOfferings] = useState<any[]>([]);
+  const [allTasks, setAllTasks] = useState<ClassroomTaskItem[]>([]);
+  const [homeViewMode, setHomeViewMode] = useState<'home' | 'todo'>('home');
   const [activeId, setActiveId] = useState<number | null>(offeringId ? Number(offeringId) : null);
   const [workspace, setWorkspace] = useState<any | null>(null);
   const [analytics, setAnalytics] = useState<any | null>(null);
   const [submitCelebrationKey, setSubmitCelebrationKey] = useState<number>(0);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'stream' | 'classwork' | 'people' | 'tcs_gradebook'>('stream');
+  const [offeringsLoading, setOfferingsLoading] = useState(true);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<
+    'stream' | 'classwork' | 'materials' | 'quizzes' | 'attendance' | 'people' | 'tcs_gradebook'
+  >('stream');
+  const [studentPreviewSection, setStudentPreviewSection] = useState<string | null>(null);
   const reducedMotion = usePrefersReducedMotion();
   const [toast, setToast] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const showToast = (text: string, type: 'success' | 'error' = 'success') =>
@@ -73,22 +93,49 @@ const ClassroomPage: React.FC = () => {
   const [copiedJoinCode, setCopiedJoinCode] = useState(false);
   const [regeneratingJoinCode, setRegeneratingJoinCode] = useState(false);
 
-  // Request sequencing & AbortController refs to prevent stale course switching races
+  // Customize course banner modal state (Professor/Admin)
+  const [bannerModalOffering, setBannerModalOffering] = useState<any | null>(null);
+  const [bannerDraftUrl, setBannerDraftUrl] = useState('');
+  const [bannerUploadKb, setBannerUploadKb] = useState<number | null>(null);
+  const [bannerCropFile, setBannerCropFile] = useState<File | null>(null);
+  const [savingBanner, setSavingBanner] = useState(false);
+
+  // Request sequencing, AbortController, and instant in-memory workspace cache
   const workspaceSeqRef = useRef(0);
   const workspaceAbortRef = useRef<AbortController | null>(null);
+  const workspaceCacheRef = useRef<Map<number, any>>(new Map());
+  const analyticsCacheRef = useRef<Map<number, any>>(new Map());
+  const prefetchInFlightRef = useRef<Set<number>>(new Set());
 
   // Join by elective code
   const [joinCodeInput, setJoinCodeInput] = useState('');
 
-  // Stream: New announcement & comments
+  // Stream: New announcement / lecture notes & comments
   const [annTitle, setAnnTitle] = useState('');
   const [annContent, setAnnContent] = useState('');
   const [annDriveUrl, setAnnDriveUrl] = useState('');
   const [annPinned, setAnnPinned] = useState(false);
+  const [annScheduledFor, setAnnScheduledFor] = useState('');
+  const [annFile, setAnnFile] = useState<File | null>(null);
+  const [annUploadProgress, setAnnUploadProgress] = useState<{ stage: string; pct: number } | null>(
+    null
+  );
+  const [annUploading, setAnnUploading] = useState(false);
+  const annFileInputRef = useRef<HTMLInputElement | null>(null);
   const [commentInputs, setCommentInputs] = useState<Record<number, string>>({});
 
   // Classwork: Create Assignment or TCS iON Quiz
   const [showNewAssignmentModal, setShowNewAssignmentModal] = useState(false);
+  const [asgnAttachMode, setAsgnAttachMode] = useState<'FILE' | 'LINK'>(
+    isGoogleDriveOAuthConfigured() ? 'FILE' : 'LINK'
+  );
+  const [asgnFile, setAsgnFile] = useState<File | null>(null);
+  const [asgnUploadProgress, setAsgnUploadProgress] = useState<{
+    stage: string;
+    pct: number;
+  } | null>(null);
+  const [asgnPublishing, setAsgnPublishing] = useState(false);
+  const asgnFileInputRef = useRef<HTMLInputElement | null>(null);
   const [asgnForm, setAsgnForm] = useState({
     title: '',
     description: '',
@@ -97,23 +144,74 @@ const ClassroomPage: React.FC = () => {
     resource_url: '',
     tcs_ion_launch_url: '',
     tcs_ion_exam_code: '',
+    due_at: '',
     max_marks: '100',
+    is_group_assignment: false,
+    max_group_size: '4',
+    late_penalty_pct_per_day: '0',
+    grace_minutes: '0',
+    grades_published: true,
   });
 
-  // Zero-DB-Storage Submission Modal (Google Drive Auto-Upload vs Direct Link)
+  // Zero-DB-Storage Submission Modal (Google Drive Auto-Upload vs Native Upload vs Direct Link)
   const [submittingAssignment, setSubmittingAssignment] = useState<any | null>(null);
-  const [submitMode, setSubmitMode] = useState<'GOOGLE_DRIVE_AUTO' | 'DIRECT_LINK'>(
-    isGoogleDriveOAuthConfigured() ? 'GOOGLE_DRIVE_AUTO' : 'DIRECT_LINK'
+  const [submittingWork, setSubmittingWork] = useState(false);
+  const [submitMode, setSubmitMode] = useState<'GOOGLE_DRIVE_AUTO' | 'DIRECT_LINK' | 'NATIVE_UPLOAD'>(
+    isGoogleDriveOAuthConfigured() ? 'GOOGLE_DRIVE_AUTO' : 'NATIVE_UPLOAD'
   );
+  const [groupModalAsgn, setGroupModalAsgn] = useState<any | null>(null);
+  const [drawerTarget, setDrawerTarget] = useState<{
+    asgn: any;
+    sub: any;
+    canGrade: boolean;
+  } | null>(null);
+  const [similarityReports, setSimilarityReports] = useState<Record<number, any>>({});
+  const [similarityLoadingId, setSimilarityLoadingId] = useState<number | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState<{ stage: string; pct: number } | null>(null);
   const [directLinkUrl, setDirectLinkUrl] = useState('');
   const [submissionNotes, setSubmissionNotes] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Edit Announcement / Edit Assignment Modals & Leave State
+  const [editingAnn, setEditingAnn] = useState<any | null>(null);
+  const [editAnnTitle, setEditAnnTitle] = useState('');
+  const [editAnnContent, setEditAnnContent] = useState('');
+  const [savingAnnEdit, setSavingAnnEdit] = useState(false);
+
+  const [editingAsgn, setEditingAsgn] = useState<any | null>(null);
+  const [editAsgnForm, setEditAsgnForm] = useState({
+    title: '',
+    description: '',
+    due_at: '',
+    max_marks: '100',
+    allow_late: true,
+  });
+  const [savingAsgnEdit, setSavingAsgnEdit] = useState(false);
+  const [showReleaseModal, setShowReleaseModal] = useState(false);
+  const [workspaceAccessError, setWorkspaceAccessError] = useState<string | null>(null);
+  const [expandedStreamIds, setExpandedStreamIds] = useState<Record<string, boolean>>({});
+  const [syllabusUploading, setSyllabusUploading] = useState(false);
+  const [syllabusViewing, setSyllabusViewing] = useState(false);
+  const syllabusInputRef = useRef<HTMLInputElement | null>(null);
+  const [rosterUploading, setRosterUploading] = useState(false);
+  const [rosterUploadResult, setRosterUploadResult] = useState<any | null>(null);
+  const rosterInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Multi-Section Scoping State (Cross-Section Read + Strict Write/Edit/Grade Isolation)
+  const [sectionViewFilter, setSectionViewFilter] = useState<string>('ALL');
+  const [annTargetSections, setAnnTargetSections] = useState<string[]>(['ALL']);
+  const [asgnTargetSections, setAsgnTargetSections] = useState<string[]>(['ALL']);
+  const [savingMySections, setSavingMySections] = useState(false);
+  const [newSectionName, setNewSectionName] = useState('');
+  const [addingSection, setAddingSection] = useState(false);
+  const [rosterDefaultSection, setRosterDefaultSection] = useState('Sec A');
+
   // People Tab: Add Co-Professor or Public TA
   const [coProfEmail, setCoProfEmail] = useState('');
-  const [coProfRole, setCoProfRole] = useState('Co-Instructor (Sec B)');
+  const [coProfRole, setCoProfRole] = useState('Co-Instructor');
+  const [coProfSection, setCoProfSection] = useState('ALL');
+  const [taSection, setTaSection] = useState('ALL');
   const [newTaForm, setNewTaForm] = useState({
     public_name: '',
     public_email: '',
@@ -126,88 +224,210 @@ const ClassroomPage: React.FC = () => {
   const [gradingSub, setGradingSub] = useState<any | null>(null);
   const [gradeMarks, setGradeMarks] = useState('');
   const [gradeFeedback, setGradeFeedback] = useState('');
+  const [savingGrade, setSavingGrade] = useState(false);
   const [tcsCsvText, setTcsCsvText] = useState('');
 
   const isProfessorOrAdmin = Boolean(
     user && (user.admin_role === 'professor' || user.is_professor || user.is_admin)
   );
+  const taOfferingSet = new Set((user?.ta_offering_ids || []).map((id: any) => Number(id)));
 
-  const loadOfferingsList = async () => {
+  const loadOfferingsList = async (silent = false) => {
     if (!user) {
       setOfferings([]);
+      setAllTasks([]);
       setWorkspace(null);
-      setLoading(false);
+      setOfferingsLoading(false);
+      setWorkspaceLoading(false);
+      workspaceCacheRef.current.clear();
+      analyticsCacheRef.current.clear();
       return;
     }
+    if (!silent) setOfferingsLoading(true);
     try {
-      const res = await API.client.get('/classroom/offerings');
-      const list = res.data?.items || [];
+      const data = await classroomApi.listOfferings();
+      const list = data?.items || [];
       setOfferings(list);
-      const targetId = offeringId ? Number(offeringId) : activeId || list[0]?.id || null;
-      if (targetId) {
-        setActiveId(targetId);
-        await loadWorkspace(targetId);
-      } else {
-        setWorkspace(null);
-        setLoading(false);
-      }
+      setAllTasks(Array.isArray(data?.tasks) ? data.tasks : []);
     } catch (err) {
       console.error('Failed to load classroom offerings:', err);
-      setOfferings([]);
-      setWorkspace(null);
-      setLoading(false);
+      if (!silent) {
+        setOfferings([]);
+        setAllTasks([]);
+      }
+    } finally {
+      setOfferingsLoading(false);
     }
   };
 
-  const loadWorkspace = async (id: number) => {
+  const prefetchWorkspace = (id: number) => {
+    if (!user || !id || workspaceCacheRef.current.has(id) || prefetchInFlightRef.current.has(id)) {
+      return;
+    }
+    prefetchInFlightRef.current.add(id);
+    classroomApi
+      .getWorkspace(id)
+      .then((data) => {
+        if (data) {
+          workspaceCacheRef.current.set(id, data);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        prefetchInFlightRef.current.delete(id);
+      });
+  };
+
+  const loadWorkspace = async (id: number, { forceSilent = false }: { forceSilent?: boolean } = {}) => {
     workspaceAbortRef.current?.abort();
     const controller = new AbortController();
     workspaceAbortRef.current = controller;
     const seq = ++workspaceSeqRef.current;
 
-    setLoading(true);
-    setAnalytics(null);
+    const cached = workspaceCacheRef.current.get(id);
+    if (cached) {
+      setWorkspace(cached);
+      setWorkspaceLoading(false);
+      const cachedAnalytics = analyticsCacheRef.current.get(id);
+      setAnalytics(cachedAnalytics ?? null);
+    } else if (!forceSilent) {
+      setWorkspace(null);
+      setAnalytics(null);
+      setWorkspaceLoading(true);
+    }
+
     try {
-      const res = await API.client.get(`/classroom/offerings/${id}`, {
+      const wsData = await classroomApi.getWorkspace(id, {
         signal: controller.signal,
       });
       if (seq !== workspaceSeqRef.current) return;
-      setWorkspace(res.data);
-      const p = res.data?.permissions;
+      workspaceCacheRef.current.set(id, wsData);
+      setWorkspaceAccessError(null);
+      setWorkspace(wsData);
+      const p = wsData?.permissions;
       if (p?.can_grade || p?.can_manage_course) {
-        API.getClassroomAnalytics(id)
-          .then((aRes) => {
+        classroomApi
+          .getAnalytics(id)
+          .then((aData) => {
+            if (aData) {
+              analyticsCacheRef.current.set(id, aData);
+            }
             if (seq === workspaceSeqRef.current) {
-              setAnalytics(aRes?.data || null);
+              setAnalytics(aData || null);
             }
           })
           .catch(() => {});
       }
     } catch (err: any) {
       if (controller.signal.aborted || seq !== workspaceSeqRef.current) return;
-      console.error('Failed to load classroom workspace:', err);
-      setWorkspace(null);
-      showToast(
+      const errStatus = err?.response?.status;
+      const accessMsg =
         err?.response?.data?.detail ||
-          err?.message ||
-          'You do not have access to this course classroom.',
-        'error'
-      );
+        err?.message ||
+        'You are not enrolled in or assigned to this course classroom.';
+      if (errStatus !== 403 && errStatus !== 404) {
+        console.error('Failed to load classroom workspace:', err);
+      }
+      if (!cached) {
+        setWorkspace(null);
+        setWorkspaceAccessError(accessMsg);
+      }
     } finally {
-      if (seq === workspaceSeqRef.current) setLoading(false);
+      if (seq === workspaceSeqRef.current) setWorkspaceLoading(false);
     }
   };
 
+  // Load offerings & cross-course tasks ONCE per authenticated user (never re-fetch on class clicks!)
   useEffect(() => {
+    workspaceCacheRef.current.clear();
+    analyticsCacheRef.current.clear();
     loadOfferingsList();
+  }, [user?.id]);
+
+  // Switch between Home Hub (0 ms) and Course Workspace (0 ms when cached/prefetched)
+  useEffect(() => {
+    if (!user) return;
+    if (!offeringId) {
+      workspaceAbortRef.current?.abort();
+      setActiveId(null);
+      setWorkspace(null);
+      setAnalytics(null);
+      setWorkspaceLoading(false);
+      return;
+    }
+    const targetId = Number(offeringId);
+    if (!Number.isFinite(targetId) || targetId <= 0) return;
+    setActiveId(targetId);
+    loadWorkspace(targetId);
     return () => {
       workspaceAbortRef.current?.abort();
     };
   }, [offeringId, user?.id]);
 
-  const handleSelectOffering = (id: number) => {
+  const openBannerModal = (targetOffering: any) => {
+    if (!targetOffering) return;
+    setBannerModalOffering(targetOffering);
+    setBannerDraftUrl(targetOffering.banner_image_url || '');
+    setBannerUploadKb(null);
+    setBannerCropFile(null);
+  };
+
+  const handleBannerFilePick = (file: File | null | undefined) => {
+    if (!file) return;
+    setBannerCropFile(file);
+  };
+
+  const handleSaveCourseBanner = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bannerModalOffering) return;
+    const targetId = Number(bannerModalOffering.id);
+    setSavingBanner(true);
+    try {
+      const resData = await classroomApi.updateBanner(
+        targetId,
+        bannerDraftUrl.trim() || null
+      );
+      const updatedUrl = resData?.offering?.banner_image_url ?? null;
+      setOfferings((prev) =>
+        prev.map((item) =>
+          Number(item.id) === targetId ? { ...item, banner_image_url: updatedUrl } : item
+        )
+      );
+      setWorkspace((prev: any) =>
+        prev && Number(prev.offering?.id) === targetId
+          ? { ...prev, offering: { ...prev.offering, banner_image_url: updatedUrl } }
+          : prev
+      );
+      const cached = workspaceCacheRef.current.get(targetId);
+      if (cached?.offering) {
+        workspaceCacheRef.current.set(targetId, {
+          ...cached,
+          offering: { ...cached.offering, banner_image_url: updatedUrl },
+        });
+      }
+      setBannerModalOffering(null);
+      showToast(resData?.message || 'Course banner updated!', 'success');
+    } catch (err: any) {
+      showToast(
+        err?.response?.data?.detail || err?.message || 'Could not update course banner',
+        'error'
+      );
+    } finally {
+      setSavingBanner(false);
+    }
+  };
+
+  const handleSelectOffering = (id: number, initialTab: 'stream' | 'classwork' = 'stream') => {
+    setActiveTab(initialTab);
     setActiveId(id);
     navigate(`/classroom/${id}`);
+  };
+
+  const handleGoClassroomHome = (mode: 'home' | 'todo' = 'home') => {
+    setHomeViewMode(mode);
+    setActiveId(null);
+    setWorkspace(null);
+    navigate('/classroom');
   };
 
   const handleCopyJoinCode = async (code: string) => {
@@ -225,10 +445,8 @@ const ClassroomPage: React.FC = () => {
     if (!activeId || regeneratingJoinCode) return;
     setRegeneratingJoinCode(true);
     try {
-      const res = await API.client.post(
-        `/classroom/offerings/${activeId}/regenerate-join-code`
-      );
-      const newCode = res.data?.join_code;
+      const resData = await classroomApi.regenerateJoinCode(activeId);
+      const newCode = resData?.join_code;
       if (newCode) {
         setWorkspace((prev: any) =>
           prev
@@ -260,14 +478,14 @@ const ClassroomPage: React.FC = () => {
     e.preventDefault();
     if (!joinCodeInput.trim()) return;
     try {
-      const res = await API.client.post('/classroom/offerings/join-code', {
+      const resData = await classroomApi.joinByCode({
         join_code: joinCodeInput,
       });
-      showToast(res.data?.message || 'Joined course classroom!', 'success');
+      showToast(resData?.message || 'Joined course classroom!', 'success');
       setJoinCodeInput('');
       await loadOfferingsList();
-      if (res.data?.offering_id) {
-        handleSelectOffering(res.data.offering_id);
+      if (resData?.offering_id) {
+        handleSelectOffering(resData.offering_id);
       }
     } catch (err: any) {
       showToast(err?.response?.data?.detail || err?.message || 'Invalid join code', 'error');
@@ -276,25 +494,69 @@ const ClassroomPage: React.FC = () => {
 
   const handlePostAnnouncement = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeId || !annContent.trim()) return;
+    if (!activeId || !annContent.trim() || annUploading) return;
+    setAnnUploading(true);
     try {
-      const attachments = annDriveUrl.trim()
-        ? [{ label: 'Attached Google Drive Resource', url: annDriveUrl.trim(), type: 'DRIVE' }]
-        : [];
-      await API.client.post(`/classroom/offerings/${activeId}/announcements`, {
+      const attachments: Array<{ label: string; url: string; type: string }> = [];
+
+      if (annFile) {
+        const uploaded = await uploadFacultyResourceToGoogleDrive({
+          file: annFile,
+          courseCode: workspace?.offering?.course_code || 'COURSE',
+          category: 'NOTES',
+          onProgress: (stage, pct) => setAnnUploadProgress({ stage, pct }),
+        });
+        attachments.push({
+          label: uploaded.file_name,
+          url: uploaded.url,
+          type: 'DRIVE',
+        });
+      }
+
+      if (annDriveUrl.trim()) {
+        const linkCheck = validateSubmissionLink(annDriveUrl);
+        if (!linkCheck.valid) {
+          showToast(linkCheck.warning || 'Attachment link must start with https://', 'error');
+          setAnnUploadProgress(null);
+          setAnnUploading(false);
+          return;
+        }
+        attachments.push({
+          label: linkCheck.provider,
+          url: annDriveUrl.trim(),
+          type: linkCheck.provider.includes('Drive') ? 'DRIVE' : 'LINK',
+        });
+      }
+
+      const postData = await classroomApi.createAnnouncement(activeId, {
         title: annTitle,
         content: annContent,
         attachment_urls: attachments,
         is_pinned: annPinned,
+        target_sections: annTargetSections,
+        scheduled_for: annScheduledFor ? new Date(annScheduledFor).toISOString() : null,
       });
       setAnnTitle('');
       setAnnContent('');
       setAnnDriveUrl('');
       setAnnPinned(false);
-      showToast('Announcement posted to course stream!', 'success');
+      setAnnScheduledFor('');
+      setAnnFile(null);
+      setAnnUploadProgress(null);
+      if (annFileInputRef.current) annFileInputRef.current.value = '';
+      showToast(
+        postData?.message ||
+          (annFile
+            ? 'Notes uploaded to Google Drive & posted to classroom stream!'
+            : 'Announcement posted to course stream!'),
+        'success'
+      );
       await loadWorkspace(activeId);
     } catch (err: any) {
+      setAnnUploadProgress(null);
       showToast(err?.response?.data?.detail || err?.message || 'Failed to post announcement', 'error');
+    } finally {
+      setAnnUploading(false);
     }
   };
 
@@ -302,9 +564,7 @@ const ClassroomPage: React.FC = () => {
     const text = (commentInputs[announcementId] || '').trim();
     if (!text || !activeId) return;
     try {
-      await API.client.post(`/classroom/announcements/${announcementId}/comments`, {
-        content: text,
-      });
+      await classroomApi.addComment(announcementId, { content: text });
       setCommentInputs((prev) => ({ ...prev, [announcementId]: '' }));
       await loadWorkspace(activeId);
     } catch (err: any) {
@@ -320,7 +580,7 @@ const ClassroomPage: React.FC = () => {
   const handleToggleVerifyComment = async (commentId: number) => {
     if (!activeId) return;
     try {
-      await API.client.patch(`/classroom/comments/${commentId}/verify`);
+      await classroomApi.verifyComment(commentId);
       await loadWorkspace(activeId);
     } catch (err: any) {
       showToast(
@@ -332,32 +592,206 @@ const ClassroomPage: React.FC = () => {
     }
   };
 
-  const handleCreateAssignment = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleTogglePinAnnouncement = async (ann: any) => {
     if (!activeId) return;
     try {
-      const links = asgnForm.resource_url.trim()
-        ? [{ label: 'Problem Sheet / Reference Link', url: asgnForm.resource_url.trim() }]
-        : [];
-      const res = await API.client.post(`/classroom/offerings/${activeId}/assignments`, {
-        ...asgnForm,
-        resource_links: links,
-        max_marks: Number(asgnForm.max_marks || 100),
+      await classroomApi.updateAnnouncement(ann.id, {
+        is_pinned: !ann.is_pinned,
       });
-      setShowNewAssignmentModal(false);
-      showToast(res.data?.message || 'Published to Classwork!', 'success');
+      showToast(!ann.is_pinned ? 'Announcement pinned' : 'Announcement unpinned', 'success');
       await loadWorkspace(activeId);
     } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to update pin status', 'error');
+    }
+  };
+
+  const handleToggleAllowComments = async (ann: any) => {
+    if (!activeId) return;
+    const nextAllow = !(ann.allow_comments !== false);
+    try {
+      await classroomApi.updateAnnouncement(ann.id, {
+        allow_comments: nextAllow,
+      });
+      showToast(nextAllow ? 'Comments enabled' : 'Comments locked on this post', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to update comment setting', 'error');
+    }
+  };
+
+  const handleSaveAnnouncementEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAnn || !activeId || savingAnnEdit) return;
+    setSavingAnnEdit(true);
+    try {
+      await classroomApi.updateAnnouncement(editingAnn.id, {
+        title: editAnnTitle,
+        content: editAnnContent,
+      });
+      setEditingAnn(null);
+      showToast('Announcement updated', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to update announcement', 'error');
+    } finally {
+      setSavingAnnEdit(false);
+    }
+  };
+
+  const handleDeleteAnnouncement = async (announcementId: number) => {
+    if (!activeId || !window.confirm('Delete this announcement and all its comments?')) return;
+    try {
+      await classroomApi.deleteAnnouncement(announcementId);
+      showToast('Announcement deleted', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to delete announcement', 'error');
+    }
+  };
+
+  const handleDeleteComment = async (commentId: number) => {
+    if (!activeId || !(perms.can_announce || perms.can_manage_course)) return;
+    if (!window.confirm('Delete this comment?')) return;
+    try {
+      await classroomApi.deleteComment(commentId);
+      showToast('Comment deleted', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to delete comment', 'error');
+    }
+  };
+
+  const handleSaveAssignmentEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAsgn || !activeId || savingAsgnEdit) return;
+    setSavingAsgnEdit(true);
+    try {
+      await classroomApi.updateAssignment(editingAsgn.id, {
+        title: editAsgnForm.title,
+        description: editAsgnForm.description,
+        due_at: editAsgnForm.due_at ? new Date(editAsgnForm.due_at).toISOString() : null,
+        max_marks: Number(editAsgnForm.max_marks) || 100,
+        allow_late: editAsgnForm.allow_late,
+      });
+      setEditingAsgn(null);
+      showToast('Assignment updated', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to update assignment', 'error');
+    } finally {
+      setSavingAsgnEdit(false);
+    }
+  };
+
+  const handleDeleteAssignment = async (assignmentId: number, title: string) => {
+    if (
+      !activeId ||
+      !window.confirm(`Delete assignment "${title}" and all student submissions for it?`)
+    ) {
+      return;
+    }
+    try {
+      await classroomApi.deleteAssignment(assignmentId);
+      showToast('Assignment deleted', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to delete assignment', 'error');
+    }
+  };
+
+  const handleCreateAssignment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeId || asgnPublishing) return;
+    setAsgnPublishing(true);
+    try {
+      const links: Array<{ label: string; url: string }> = [];
+
+      if (asgnForm.assignment_type !== 'TCS_ION_QUIZ') {
+        if (asgnAttachMode === 'FILE' && asgnFile) {
+          const uploaded = await uploadFacultyResourceToGoogleDrive({
+            file: asgnFile,
+            courseCode: workspace?.offering?.course_code || 'COURSE',
+            category: 'ASSIGNMENT',
+            onProgress: (stage, pct) => setAsgnUploadProgress({ stage, pct }),
+          });
+          links.push({ label: uploaded.file_name, url: uploaded.url });
+        } else if (asgnForm.resource_url.trim()) {
+          const linkCheck = validateSubmissionLink(asgnForm.resource_url);
+          if (!linkCheck.valid) {
+            showToast(linkCheck.warning || 'Resource link must start with https://', 'error');
+            setAsgnUploadProgress(null);
+            setAsgnPublishing(false);
+            return;
+          }
+          links.push({
+            label: `${linkCheck.provider} — Problem Sheet / Reference`,
+            url: asgnForm.resource_url.trim(),
+          });
+        }
+      }
+
+      const resData = await classroomApi.createAssignment(activeId, {
+        ...asgnForm,
+        target_sections: asgnTargetSections,
+        resource_links: links,
+        due_at: asgnForm.due_at ? new Date(asgnForm.due_at).toISOString() : null,
+        max_marks: Number(asgnForm.max_marks || 100),
+        max_group_size: Number(asgnForm.max_group_size || 4),
+        late_penalty_pct_per_day: Number(asgnForm.late_penalty_pct_per_day || 0),
+        grace_minutes: Number(asgnForm.grace_minutes || 0),
+      });
+      setShowNewAssignmentModal(false);
+      setAsgnFile(null);
+      setAsgnUploadProgress(null);
+      if (asgnFileInputRef.current) asgnFileInputRef.current.value = '';
+      setAsgnForm({
+        title: '',
+        description: '',
+        topic_module: '',
+        assignment_type: 'ASSIGNMENT',
+        resource_url: '',
+        tcs_ion_launch_url: '',
+        tcs_ion_exam_code: '',
+        due_at: '',
+        max_marks: '100',
+        is_group_assignment: false,
+        max_group_size: '4',
+        late_penalty_pct_per_day: '0',
+        grace_minutes: '0',
+        grades_published: true,
+      });
+      showToast(resData?.message || 'Published to Classwork!', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      setAsgnUploadProgress(null);
       showToast(err?.response?.data?.detail || err?.message || 'Failed to publish assignment', 'error');
+    } finally {
+      setAsgnPublishing(false);
     }
   };
 
   const handleExecuteSubmission = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!submittingAssignment || !activeId) return;
+    if (!submittingAssignment || !activeId || submittingWork) return;
 
+    setSubmittingWork(true);
     try {
-      if (submitMode === 'GOOGLE_DRIVE_AUTO') {
+      if (submitMode === 'NATIVE_UPLOAD') {
+        if (!selectedFile) {
+          showToast('Please choose a file from your device first', 'error');
+          return;
+        }
+        const fd = new FormData();
+        fd.append('file', selectedFile);
+        if (submissionNotes.trim()) fd.append('submission_notes', submissionNotes.trim());
+        const apiData = await classroomApi.submitAssignmentFile(submittingAssignment.id, fd);
+        showToast(apiData?.message || 'File submitted directly!', 'success');
+        setSubmittingAssignment(null);
+        setSelectedFile(null);
+        setSubmissionNotes('');
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        await loadWorkspace(activeId);
+      } else if (submitMode === 'GOOGLE_DRIVE_AUTO') {
         if (!selectedFile) {
           showToast('Please choose a file from your device first', 'error');
           return;
@@ -371,37 +805,31 @@ const ClassroomPage: React.FC = () => {
           onProgress: (stage, pct) => setUploadProgress({ stage, pct }),
         });
 
-        const apiRes = await API.client.post(
-          `/classroom/assignments/${submittingAssignment.id}/submit`,
-          {
-            submission_url: driveRes.submission_url,
-            drive_file_id: driveRes.drive_file_id,
-            file_name: driveRes.file_name,
-            file_sha256: driveRes.file_sha256,
-            drive_modified_time: driveRes.drive_modified_time,
-            upload_mode: 'GOOGLE_DRIVE_AUTO',
-            submission_notes: submissionNotes,
-            shared_with_prof: true,
-          }
-        );
-        showToast(apiRes.data?.message || 'Saved to your Google Drive & link stored in DB!', 'success');
+        const apiData = await classroomApi.submitAssignment(submittingAssignment.id, {
+          submission_url: driveRes.submission_url,
+          drive_file_id: driveRes.drive_file_id,
+          file_name: driveRes.file_name,
+          file_sha256: driveRes.file_sha256,
+          drive_modified_time: driveRes.drive_modified_time,
+          upload_mode: 'GOOGLE_DRIVE_AUTO',
+          submission_notes: submissionNotes,
+          shared_with_prof: driveRes.shared_with_prof,
+        });
+        showToast(apiData?.message || 'Saved to your Google Drive & link stored in DB!', 'success');
       } else {
         const check = validateSubmissionLink(directLinkUrl);
         if (!check.valid) {
           showToast(check.warning || 'Please enter a valid https:// link', 'error');
           return;
         }
-        const apiRes = await API.client.post(
-          `/classroom/assignments/${submittingAssignment.id}/submit`,
-          {
-            submission_url: directLinkUrl.trim(),
-            file_name: `${check.provider} Submission`,
-            upload_mode: 'DIRECT_LINK',
-            submission_notes: submissionNotes,
-            shared_with_prof: true,
-          }
-        );
-        showToast(apiRes.data?.message || 'Direct link submitted!', 'success');
+        const apiData = await classroomApi.submitAssignment(submittingAssignment.id, {
+          submission_url: directLinkUrl.trim(),
+          file_name: `${check.provider} Submission`,
+          upload_mode: 'DIRECT_LINK',
+          submission_notes: submissionNotes,
+          shared_with_prof: true,
+        });
+        showToast(apiData?.message || 'Direct link submitted!', 'success');
       }
 
       setSubmittingAssignment(null);
@@ -414,6 +842,8 @@ const ClassroomPage: React.FC = () => {
     } catch (err: any) {
       setUploadProgress(null);
       showToast(err?.response?.data?.detail || err?.message || 'Submission failed', 'error');
+    } finally {
+      setSubmittingWork(false);
     }
   };
 
@@ -421,11 +851,15 @@ const ClassroomPage: React.FC = () => {
     e.preventDefault();
     if (!activeId || !coProfEmail.trim()) return;
     try {
-      const res = await API.client.post(`/classroom/offerings/${activeId}/add-instructor`, {
+      const resData = await classroomApi.addInstructor(activeId, {
         email: coProfEmail,
-        role_label: coProfRole,
+        role_label:
+          coProfSection !== 'ALL' && coProfRole === 'Co-Instructor'
+            ? `Instructor (${coProfSection})`
+            : coProfRole,
+        assigned_sections: coProfSection === 'ALL' ? ['ALL'] : [coProfSection],
       });
-      showToast(res.data?.message || 'Added Co-Professor', 'success');
+      showToast(resData?.message || 'Added Co-Professor', 'success');
       setCoProfEmail('');
       await loadWorkspace(activeId);
     } catch (err: any) {
@@ -437,11 +871,12 @@ const ClassroomPage: React.FC = () => {
     e.preventDefault();
     if (!activeId || !newTaForm.public_name || !newTaForm.public_email) return;
     try {
-      const res = await API.client.post(`/classroom/offerings/${activeId}/add-ta`, {
+      const resData = await classroomApi.addTA(activeId, {
         ...newTaForm,
+        assigned_sections: taSection === 'ALL' ? ['ALL'] : [taSection],
         lab_hours: '',
       });
-      showToast(res.data?.message || 'Added Course TA', 'success');
+      showToast(resData?.message || 'Added Course TA', 'success');
       setNewTaForm({
         public_name: '',
         public_email: '',
@@ -455,11 +890,218 @@ const ClassroomPage: React.FC = () => {
     }
   };
 
+  const handleSelectMyTeachingSections = async (nextSections: string[]) => {
+    if (!activeId || savingMySections || nextSections.length === 0) return;
+    setSavingMySections(true);
+    try {
+      const resData = await classroomApi.updateMySections(activeId, nextSections);
+      showToast(resData?.message || 'Teaching section preference updated', 'success');
+      await loadWorkspace(activeId, { forceSilent: true });
+    } catch (err: any) {
+      showToast(
+        err?.response?.data?.detail || err?.message || 'Could not update teaching section(s)',
+        'error'
+      );
+    } finally {
+      setSavingMySections(false);
+    }
+  };
+
+  const handleAddCourseSection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = newSectionName.replace(/\s+/g, ' ').trim();
+    if (!activeId || !cleaned || addingSection) return;
+    const currentSecs: string[] = Array.isArray(workspace?.offering?.sections)
+      ? workspace.offering.sections
+      : ['Sec A'];
+    if (currentSecs.some((s) => s.toLowerCase() === cleaned.toLowerCase())) {
+      setNewSectionName('');
+      return;
+    }
+    setAddingSection(true);
+    try {
+      const resData = await classroomApi.updateOfferingSections(activeId, [...currentSecs, cleaned]);
+      setNewSectionName('');
+      showToast(resData?.message || `Added section ${cleaned}`, 'success');
+      await loadWorkspace(activeId, { forceSilent: true });
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || err?.message || 'Failed to add section', 'error');
+    } finally {
+      setAddingSection(false);
+    }
+  };
+
+  const handleUpdateInstructorSection = async (professorId: number, sectionVal: string) => {
+    if (!activeId) return;
+    try {
+      const resData = await classroomApi.updateInstructorSections(
+        activeId,
+        professorId,
+        sectionVal === 'ALL' ? ['ALL'] : [sectionVal]
+      );
+      showToast(resData?.message || 'Updated instructor section scope', 'success');
+      await loadWorkspace(activeId, { forceSilent: true });
+    } catch (err: any) {
+      showToast(
+        err?.response?.data?.detail || err?.message || 'Failed to update instructor sections',
+        'error'
+      );
+    }
+  };
+
+  const handleUpdateStudentSection = async (enrollmentId: number, nextSection: string) => {
+    if (!activeId || !nextSection) return;
+    try {
+      const resData = await classroomApi.updateStudentSection(activeId, enrollmentId, nextSection);
+      showToast(resData?.message || `Moved student to ${nextSection}`, 'success');
+      await loadWorkspace(activeId, { forceSilent: true });
+    } catch (err: any) {
+      showToast(
+        err?.response?.data?.detail || err?.message || 'Failed to move student section',
+        'error'
+      );
+    }
+  };
+
+  const handleRemoveInstructor = async (professorId: number, name: string) => {
+    if (!activeId || !window.confirm(`Remove ${name} as an instructor from this course?`)) return;
+    try {
+      const resData = await classroomApi.removeInstructor(activeId, professorId);
+      showToast(resData?.message || 'Removed instructor', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to remove instructor', 'error');
+    }
+  };
+
+  const handleToggleTaPerm = async (ta: any, field: 'can_grade' | 'can_announce') => {
+    if (!activeId) return;
+    try {
+      await classroomApi.updateTA(activeId, ta.id, {
+        [field]: !ta[field],
+      });
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to update TA permission', 'error');
+    }
+  };
+
+  const handleRemoveTa = async (taId: number, name: string) => {
+    if (!activeId || !window.confirm(`Remove Course TA ${name}?`)) return;
+    try {
+      await classroomApi.removeTA(activeId, taId);
+      showToast('Course TA removed', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to remove TA', 'error');
+    }
+  };
+
+  const handleRemoveStudent = async (enrollmentId: number, name: string) => {
+    if (!activeId || !window.confirm(`Remove ${name} from the course roster?`)) return;
+    try {
+      await classroomApi.removeStudent(activeId, enrollmentId);
+      showToast('Student removed from roster', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to remove student', 'error');
+    }
+  };
+
+  const handleUploadSyllabusPdf = async (file: File | null | undefined) => {
+    if (!activeId || !file || syllabusUploading) return;
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      showToast('Only PDF files (.pdf) are allowed for the course description.', 'error');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('Course description PDF must be 10 MB or smaller.', 'error');
+      return;
+    }
+    setSyllabusUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const resData = await classroomApi.uploadSyllabusPdf(activeId, fd);
+      showToast(resData?.message || 'Course description PDF uploaded!', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(
+        err?.response?.data?.detail || err?.message || 'Failed to upload course description PDF',
+        'error'
+      );
+    } finally {
+      setSyllabusUploading(false);
+    }
+  };
+
+  const handleOpenSyllabusPdf = async (download = false) => {
+    if (!activeId || syllabusViewing) return;
+    setSyllabusViewing(true);
+    try {
+      const rawBlob = await classroomApi.downloadSyllabusPdf(activeId, download);
+      const blob = new Blob([rawBlob], { type: 'application/pdf' });
+      const blobUrl = window.URL.createObjectURL(blob);
+      if (download) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = off?.course_desc_pdf_name || `${off?.course_code || 'Course'}_Description.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1500);
+      } else {
+        window.open(blobUrl, '_blank', 'noopener,noreferrer');
+        setTimeout(() => window.URL.revokeObjectURL(blobUrl), 60000);
+      }
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Could not load course description PDF', 'error');
+    } finally {
+      setSyllabusViewing(false);
+    }
+  };
+
+  const handleDeleteSyllabusPdf = async () => {
+    if (!activeId || !window.confirm('Remove the uploaded course description PDF?')) return;
+    try {
+      await classroomApi.deleteSyllabusPdf(activeId);
+      showToast('Course description PDF removed', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Failed to remove course description PDF', 'error');
+    }
+  };
+
+  const handleUploadRosterFile = async (file: File | null | undefined) => {
+    if (!activeId || !file || rosterUploading) return;
+    setRosterUploading(true);
+    setRosterUploadResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      if (rosterDefaultSection) {
+        fd.append('default_section', rosterDefaultSection);
+      }
+      const resData = await classroomApi.uploadRoster(activeId, fd);
+      setRosterUploadResult(resData || null);
+      showToast(resData?.message || 'Student email roster imported!', 'success');
+      await loadWorkspace(activeId);
+    } catch (err: any) {
+      showToast(
+        err?.response?.data?.detail || err?.message || 'Failed to import roster file',
+        'error'
+      );
+    } finally {
+      setRosterUploading(false);
+    }
+  };
+
   const handleSaveGrade = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!gradingSub || !activeId) return;
+    if (!gradingSub || !activeId || savingGrade) return;
+    setSavingGrade(true);
     try {
-      await API.client.patch(`/classroom/submissions/${gradingSub.id}/grade`, {
+      await classroomApi.gradeSubmission(gradingSub.id, {
         marks_obtained: Number(gradeMarks),
         feedback: gradeFeedback,
       });
@@ -468,16 +1110,16 @@ const ClassroomPage: React.FC = () => {
       await loadWorkspace(activeId);
     } catch (err: any) {
       showToast(err?.response?.data?.detail || err?.message || 'Failed to save grade', 'error');
+    } finally {
+      setSavingGrade(false);
     }
   };
 
   const handleImportTcsRoster = async () => {
     if (!activeId || !tcsCsvText.trim()) return;
     try {
-      const res = await API.client.post(`/classroom/offerings/${activeId}/tcs-roster-import`, {
-        csv_text: tcsCsvText,
-      });
-      showToast(res.data?.message || 'TCS iON Roster synced!', 'success');
+      const resData = await classroomApi.importTcsRoster(activeId, tcsCsvText);
+      showToast(resData?.message || 'TCS iON Roster synced!', 'success');
       await loadWorkspace(activeId);
     } catch (err: any) {
       showToast(err?.response?.data?.detail || err?.message || 'TCS iON import failed', 'error');
@@ -487,10 +1129,8 @@ const ClassroomPage: React.FC = () => {
   const handleDownloadTcsMarksCsv = async () => {
     if (!activeId) return;
     try {
-      const res = await API.client.get(`/classroom/offerings/${activeId}/tcs-marks-export`, {
-        responseType: 'blob',
-      });
-      const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }));
+      const rawBlob = await classroomApi.exportTcsMarksCsv(activeId);
+      const blobUrl = window.URL.createObjectURL(new Blob([rawBlob], { type: 'text/csv' }));
       const a = document.createElement('a');
       a.href = blobUrl;
       a.download = `TCS_iON_Marks_${workspace?.offering?.course_code || 'COURSE'}.csv`;
@@ -506,6 +1146,67 @@ const ClassroomPage: React.FC = () => {
 
   const perms = workspace?.permissions || {};
   const off = workspace?.offering;
+
+  const offeringSectionsList: string[] = React.useMemo(() => {
+    const raw: string[] = Array.isArray(off?.sections) ? off.sections : [];
+    const cleaned = raw.map((s) => String(s || '').trim()).filter((s) => s && !/^all$/i.test(s));
+    return cleaned.length > 0 ? cleaned : ['Sec A'];
+  }, [off?.sections]);
+
+  const myAssignedSections: string[] = React.useMemo(() => {
+    const raw: string[] = Array.isArray(perms.assigned_sections) ? perms.assigned_sections : ['ALL'];
+    return raw.length > 0 ? raw : ['ALL'];
+  }, [perms.assigned_sections]);
+
+  const isUnrestrictedStaff = Boolean(
+    perms.is_admin || myAssignedSections.some((s) => s.toUpperCase() === 'ALL')
+  );
+
+  // Sync section defaults cleanly when entering a classroom or changing teaching sections
+  useEffect(() => {
+    if (!off?.id) return;
+    if (isUnrestrictedStaff) {
+      setSectionViewFilter('ALL');
+      setAnnTargetSections(['ALL']);
+      setAsgnTargetSections(['ALL']);
+      setRosterDefaultSection(offeringSectionsList[0] || 'Sec A');
+      setTaSection('ALL');
+    } else {
+      setSectionViewFilter(myAssignedSections.length === 1 ? myAssignedSections[0] : 'ALL');
+      setAnnTargetSections(myAssignedSections);
+      setAsgnTargetSections(myAssignedSections);
+      setRosterDefaultSection(myAssignedSections[0] || offeringSectionsList[0] || 'Sec A');
+      setTaSection(myAssignedSections[0] || 'Sec A');
+    }
+  }, [off?.id, isUnrestrictedStaff, JSON.stringify(myAssignedSections)]);
+
+  const toggleTargetChip = (currentList: string[], chip: string): string[] => {
+    if (chip === 'ALL') return ['ALL'];
+    const base = currentList.filter((s) => s.toUpperCase() !== 'ALL');
+    const exists = base.some((s) => s.toLowerCase() === chip.toLowerCase());
+    if (exists) {
+      const rem = base.filter((s) => s.toLowerCase() !== chip.toLowerCase());
+      return rem.length > 0 ? rem : [chip];
+    }
+    return [...base, chip];
+  };
+
+  const toggleMySectionChip = (sec: string) => {
+    if (sec === 'ALL') {
+      handleSelectMyTeachingSections(['ALL']);
+      return;
+    }
+    const base = myAssignedSections.filter((s) => s.toUpperCase() !== 'ALL');
+    const exists = base.some((s) => s.toLowerCase() === sec.toLowerCase());
+    let next: string[];
+    if (exists) {
+      const rem = base.filter((s) => s.toLowerCase() !== sec.toLowerCase());
+      next = rem.length > 0 ? rem : ['ALL'];
+    } else {
+      next = [...base, sec];
+    }
+    handleSelectMyTeachingSections(next);
+  };
 
   const peopleTotal = workspace
     ? (workspace.instructors?.length || 0) +
@@ -553,7 +1254,7 @@ const ClassroomPage: React.FC = () => {
                 className="px-5 py-2.5 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-white/70 dark:bg-white/[0.03] text-xs font-medium inline-flex items-center gap-1.5 hover:border-[#896ABD] transition-[border-color]"
               >
                 <GraduationCap className="w-3.5 h-3.5 text-[#896ABD]" />
-                <span>Faculty &amp; TA Directory</span>
+                <span>Faculty</span>
               </Link>
             </div>
           </div>
@@ -570,208 +1271,352 @@ const ClassroomPage: React.FC = () => {
       {/* Unified Global Navigation Bar */}
       <GlobalNavbar />
 
-      {/* Main Layout: Course Switcher Strip + Active Classroom */}
-      <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-8 space-y-6">
-        {toast && (
-          <div
-            className={`px-4 py-3 rounded-xl text-xs flex items-center justify-between backdrop-blur-md border ${
-              toast.type === 'error'
-                ? 'bg-rose-500/10 border-rose-500/35 text-rose-800 dark:text-rose-300'
-                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              {toast.type === 'error' ? (
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-              ) : (
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-              )}
-              <span>{toast.text}</span>
+      {/* Full-Width Classroom Shell: Persistent Left Sidebar + Home Hub or Active Course */}
+      <main className="relative z-10 flex-1 max-w-[1680px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="flex items-start gap-6">
+          <ClassroomSidebar
+            offerings={offerings}
+            activeOfferingId={offeringId ? Number(offeringId) : null}
+            pendingCount={
+              allTasks.filter((t) =>
+                isProfessorOrAdmin || taOfferingSet.has(Number(t.offering_id))
+                  ? t.pending_grading > 0
+                  : !t.submitted
+              ).length
+            }
+            homeViewMode={homeViewMode}
+            onGoHome={handleGoClassroomHome}
+            onSelectOffering={(id) => handleSelectOffering(id, 'stream')}
+            onPrefetchOffering={prefetchWorkspace}
+          />
+
+          <div className="flex-1 min-w-0 space-y-6">
+        <AnimatePresence>
+          {toast && (
+            <div className="fixed top-20 left-0 right-0 z-50 flex justify-center pointer-events-none px-4">
+              <motion.div
+                role="status"
+                aria-live="polite"
+                initial={{ opacity: 0, y: -12, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                transition={{ duration: 0.2, ease: EASE_OUT }}
+                className={`pointer-events-auto max-w-lg w-full sm:w-auto px-4 py-3 rounded-xl text-sm flex items-center justify-between gap-4 border shadow-[var(--shadow-elevated)] backdrop-blur-md ${
+                  toast.type === 'error'
+                    ? 'bg-rose-50/95 dark:bg-[#1E1316]/95 border-rose-500/35 text-rose-800 dark:text-rose-200'
+                    : 'bg-white/95 dark:bg-[#131817]/95 border-emerald-500/35 text-emerald-800 dark:text-emerald-200'
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  {toast.type === 'error' ? (
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                  )}
+                  <span className="font-medium truncate">{toast.text}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setToast(null)}
+                  className="text-xs font-mono-tabular underline ml-2 shrink-0 hover:opacity-80 active:scale-[0.95] transition-transform duration-150"
+                >
+                  Dismiss
+                </button>
+              </motion.div>
             </div>
-            <button
-              type="button"
-              onClick={() => setToast(null)}
-              className="text-[11px] font-mono-tabular underline ml-4 shrink-0"
-            >
-              Dismiss
-            </button>
+          )}
+        </AnimatePresence>
+
+        {/* Mobile / Compact Back-to-Home & Course Switcher Bar when inside a specific course */}
+        {offeringId && (
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#E5E2DC] dark:border-white/10">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => handleGoClassroomHome('home')}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium bg-white/95 dark:bg-[#13131A]/95 border border-[#E5E2DC] dark:border-white/15 hover:border-[#896ABD] transition-[border-color]"
+              >
+                <span>← All Classes &amp; Tasks</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleGoClassroomHome('todo')}
+                className="lg:hidden inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#896ABD]/10 text-[#5B3B96] border border-[#896ABD]/30 hover:bg-[#896ABD]/15"
+              >
+                <ListChecks className="w-3.5 h-3.5" />
+                <span>To-do</span>
+              </button>
+            </div>
+
+            <div className="flex lg:hidden items-center gap-2 overflow-x-auto pb-1">
+              {offerings.map((item) => {
+                const isSelected = Number(item.id) === Number(activeId);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleSelectOffering(item.id, 'stream')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono-tabular font-semibold shrink-0 border ${
+                      isSelected
+                        ? 'bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] border-transparent'
+                        : 'bg-white/95 dark:bg-[#13131A]/95 border-[#E5E2DC] dark:border-white/15'
+                    }`}
+                  >
+                    {item.course_code}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 
-        {/* Course Selector Strip + Role-Aware Utility Slot */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-4 border-b border-[#E5E2DC] dark:border-white/10">
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            {offerings.map((item) => {
-              const isSelected = Number(item.id) === Number(activeId);
-              const roleTag = item.is_instructor
-                ? 'Instructor'
-                : item.is_ta
-                  ? 'TA'
-                  : item.is_enrolled
-                    ? 'Enrolled'
-                    : null;
-
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => handleSelectOffering(item.id)}
-                  className={`px-3.5 py-2 rounded-xl text-xs shrink-0 border text-left transition-[border-color] ${
-                    isSelected
-                      ? 'bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] border-transparent shadow-sm'
-                      : 'bg-white/90 dark:bg-[#111117]/85 border-[#E5E2DC] dark:border-white/10 hover:border-[#896ABD]/50'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono-tabular font-semibold">{item.course_code}</span>
-                    <span
-                      className={`text-[10px] font-mono-tabular ${
-                        isSelected
-                          ? 'text-[#FAF9F6]/75 dark:text-[#0A0A0C]/70'
-                          : 'text-[#5C5B57] dark:text-[#8E8D88]'
-                      }`}
-                    >
-                      {item.programme} Sem {item.semester}
-                    </span>
-                    {roleTag && (
-                      <span
-                        className={`text-[10px] font-mono-tabular px-1.5 py-0.5 rounded font-medium ${
-                          isSelected
-                            ? 'bg-white/15 dark:bg-black/15 text-inherit'
-                            : item.is_instructor
-                              ? 'bg-[#E04F33]/10 text-[#E04F33]'
-                              : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                        }`}
-                      >
-                        {roleTag}
-                      </span>
-                    )}
-                  </div>
-                  <div
-                    className={`text-[11px] truncate max-w-[190px] mt-0.5 ${
-                      isSelected
-                        ? 'text-[#FAF9F6]/80 dark:text-[#0A0A0C]/75'
-                        : 'text-[#5C5B57] dark:text-[#94938E]'
-                    }`}
-                  >
-                    {item.course_name}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          {isProfessorOrAdmin ? (
-            <div className="flex items-center gap-2 shrink-0 flex-wrap">
-              <Link
-                to="/profile"
-                className="px-3.5 py-2 rounded-xl text-xs font-medium border border-[#E5E2DC] dark:border-white/15 bg-white/90 dark:bg-[#111117]/85 hover:border-[#896ABD]/60 inline-flex items-center gap-1.5 transition-[border-color]"
-              >
-                <User className="w-3.5 h-3.5 text-[#896ABD]" />
-                <span>Faculty Profile</span>
-              </Link>
-              <Link
-                to="/faculty"
-                className="px-3.5 py-2 rounded-xl text-xs font-medium border border-[#E5E2DC] dark:border-white/15 bg-white/90 dark:bg-[#111117]/85 hover:border-[#E04F33]/60 inline-flex items-center gap-1.5 transition-[border-color]"
-              >
-                <GraduationCap className="w-3.5 h-3.5 text-[#E04F33]" />
-                <span>Directory &amp; Release Course</span>
-              </Link>
+        {!offeringId ? (
+          offeringsLoading && offerings.length === 0 ? (
+            <div className="space-y-4">
+              <div className={`${cardSurface} p-6 animate-pulse space-y-3`}>
+                <div className="h-5 w-40 rounded bg-black/10" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="h-20 rounded-xl bg-black/[0.06]" />
+                  <div className="h-20 rounded-xl bg-black/[0.06]" />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className={`${cardSurface} h-64 animate-pulse`} />
+                ))}
+              </div>
             </div>
           ) : (
-            <form onSubmit={handleJoinByCode} className="flex items-center gap-2 shrink-0">
-              <input
-                type="text"
-                value={joinCodeInput}
-                onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
-                placeholder="Enter 7-character join code"
-                className="px-3.5 py-2 rounded-xl text-xs font-mono-tabular bg-white/90 dark:bg-[#111117]/85 border border-[#E5E2DC] dark:border-white/15 focus:outline-none focus:border-[#896ABD] w-64 transition-[border-color]"
-              />
-              <button
-                type="submit"
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] hover:bg-[#E04F33] dark:hover:bg-[#E04F33] dark:hover:text-white shrink-0"
-              >
-                Join Class
-              </button>
-            </form>
-          )}
-        </div>
-
-        {loading ? (
-          <div className="py-16 text-center text-sm text-[#5C5B57] dark:text-[#94938E]">
-            Loading Classroom Workspace...
-          </div>
-        ) : !workspace || !off ? (
-          <div className={`${cardSurface} p-8 sm:p-10 text-center space-y-4`}>
-            <BookOpen className="w-8 h-8 text-[#896ABD] mx-auto" />
-            {offerings.length === 0 ? (
-              <>
-                <h2 className="text-lg font-semibold">
-                  No active course classrooms assigned to your account yet
-                </h2>
-                <p className="text-xs sm:text-sm text-[#5C5B57] dark:text-[#A09F9A] max-w-md mx-auto leading-relaxed">
-                  {isProfessorOrAdmin
-                    ? 'Visit the Faculty Directory to release a new course classroom for your batch, or update your Faculty Profile.'
-                    : 'Enter an elective join code shared by your course professor above, or browse Past Papers and the Faculty Directory.'}
-                </p>
-                <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
-                  <Link
-                    to="/faculty"
-                    className="px-4 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 text-xs font-medium hover:border-[#896ABD] transition-[border-color]"
-                  >
-                    Open Faculty &amp; TA Directory
-                  </Link>
-                  <Link
-                    to="/past-papers"
-                    className="px-4 py-2 rounded-xl bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] text-xs font-semibold"
-                  >
-                    Browse Past Exam Papers
-                  </Link>
+            <ClassroomHomeHub
+              offerings={offerings}
+              tasks={allTasks}
+              isProfessorOrAdmin={isProfessorOrAdmin}
+              taOfferingIds={user?.ta_offering_ids || []}
+              joinCodeInput={joinCodeInput}
+              onJoinCodeChange={setJoinCodeInput}
+              onJoinByCode={handleJoinByCode}
+              onOpenClass={handleSelectOffering}
+              onPrefetchClass={prefetchWorkspace}
+              onCustomizeBanner={openBannerModal}
+              onOpenReleaseModal={() => setShowReleaseModal(true)}
+              viewFilter={homeViewMode}
+              onChangeViewFilter={setHomeViewMode}
+            />
+          )
+        ) : workspaceLoading && !workspace ? (
+          (() => {
+            const previewOff = offerings.find((o) => Number(o.id) === Number(offeringId));
+            return (
+              <div className="space-y-5">
+                <section className={`${cardSurface} overflow-hidden`}>
+                  <div className="relative h-36 bg-[#0F121C] overflow-hidden p-6 flex flex-col justify-end">
+                    {previewOff && (
+                      <img
+                        src={getCourseBannerImage(previewOff)}
+                        alt=""
+                        aria-hidden="true"
+                        className="absolute inset-0 w-full h-full object-cover opacity-85"
+                      />
+                    )}
+                    <div className="absolute inset-0" style={COURSE_BANNER_SCRIM_STYLE} />
+                    <div className="relative z-10 space-y-1.5">
+                      {previewOff ? (
+                        <>
+                          <span className="inline-block px-2.5 py-0.5 rounded bg-black/55 border border-white/25 font-mono-tabular text-xs font-semibold text-white">
+                            {previewOff.course_code}
+                          </span>
+                          <h1
+                            className="text-2xl font-bold text-white"
+                            style={{ textShadow: COURSE_BANNER_TEXT_SHADOW }}
+                          >
+                            {previewOff.course_name}
+                          </h1>
+                        </>
+                      ) : (
+                        <div className="h-7 w-64 rounded bg-white/20 animate-pulse" />
+                      )}
+                    </div>
+                  </div>
+                  <div className="p-6 space-y-3 animate-pulse">
+                    <div className="h-4 w-2/3 rounded bg-black/[0.08]" />
+                    <div className="h-4 w-1/2 rounded bg-black/[0.06]" />
+                  </div>
+                </section>
+                <div className={`${cardSurface} p-6 space-y-3 animate-pulse`}>
+                  <div className="h-5 w-48 rounded bg-black/[0.08]" />
+                  <div className="h-24 rounded-xl bg-black/[0.05]" />
                 </div>
-              </>
-            ) : (
-              <>
-                <h2 className="text-lg font-semibold">
-                  You do not have access to this course classroom
-                </h2>
-                <p className="text-xs sm:text-sm text-[#5C5B57] dark:text-[#A09F9A] max-w-md mx-auto leading-relaxed">
-                  Classrooms are restricted to enrolled batch/elective students, assigned Course TAs, and teaching faculty.
-                </p>
+              </div>
+            );
+          })()
+        ) : !workspace || !off ? (
+          <div className={`${cardSurface} p-8 sm:p-10 text-center space-y-4 max-w-2xl mx-auto`}>
+            <ShieldCheck className="w-9 h-9 text-[#E04F33] mx-auto" />
+            <div className="space-y-1.5">
+              <span className="inline-flex px-2.5 py-0.5 rounded-full bg-rose-50 border border-rose-200 font-mono-tabular text-[10px] font-semibold uppercase tracking-wider text-rose-700">
+                Access Restricted · Not Enrolled
+              </span>
+              <h2 className="text-lg font-semibold text-[#0A0A0C]">
+                {offerings.length === 0
+                  ? 'You are not enrolled in this classroom'
+                  : 'You do not have permission to open this classroom'}
+              </h2>
+              <p className="text-xs sm:text-sm text-[#5C5B57] max-w-md mx-auto leading-relaxed">
+                {workspaceAccessError ||
+                  'Course classrooms are restricted to enrolled batch/elective students, teaching assistants, and assigned instructors.'}
+              </p>
+            </div>
+
+            {!isProfessorOrAdmin && (
+              <form
+                onSubmit={handleJoinByCode}
+                className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 max-w-md mx-auto pt-1"
+              >
+                <input
+                  type="text"
+                  value={joinCodeInput}
+                  onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
+                  placeholder="Have an elective join code? e.g. JK-CS302"
+                  className={`${inputSurface} flex-1 font-mono-tabular uppercase text-xs`}
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2.5 rounded-xl bg-[#0A0A0C] hover:bg-[#E04F33] text-white text-xs font-semibold transition-colors shrink-0"
+                >
+                  Join Elective
+                </button>
+              </form>
+            )}
+
+            <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
+              {activeId && !isProfessorOrAdmin && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const resData = await classroomApi.submitEnrollmentRequest(activeId, {
+                        reason: 'Late registration / classroom access request',
+                      });
+                      showToast(resData?.message || 'Enrollment request sent to faculty', 'success');
+                    } catch (err: any) {
+                      showToast(
+                        err?.response?.data?.detail || 'Could not submit enrollment request',
+                        'error'
+                      );
+                    }
+                  }}
+                  className="px-4 py-2 rounded-xl bg-[#0A0A0C] hover:bg-[#896ABD] text-white text-xs font-semibold"
+                >
+                  Request Enrollment Access
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => handleGoClassroomHome('home')}
+                className="px-4 py-2 rounded-xl bg-[#E04F33] text-white text-xs font-semibold hover:opacity-90"
+              >
+                Back to My Classrooms
+              </button>
+              {offerings.length > 0 && (
                 <button
                   type="button"
                   onClick={() => handleSelectOffering(offerings[0].id)}
-                  className="px-5 py-2.5 rounded-xl bg-[#E04F33] text-white text-xs font-semibold"
+                  className="px-4 py-2 rounded-xl border border-[#E5E2DC] bg-white text-xs font-semibold hover:border-[#896ABD]"
                 >
-                  Open Your Assigned Classroom ({offerings[0].course_code})
+                  Open {offerings[0].course_code}
                 </button>
-              </>
-            )}
+              )}
+              <Link
+                to="/past-papers"
+                className="px-4 py-2 rounded-xl border border-[#E5E2DC] text-xs font-medium hover:border-[#896ABD]"
+              >
+                Browse Past Papers
+              </Link>
+              <Link
+                to="/faculty"
+                className="px-4 py-2 rounded-xl border border-[#E5E2DC] text-xs font-medium hover:border-[#896ABD]"
+              >
+                Faculty
+              </Link>
+            </div>
           </div>
         ) : (
           <>
             <ConfettiBurst triggerKey={submitCelebrationKey} />
-            {/* Editorial Course Header Card */}
+            {/* Editorial Course Header Card with Guaranteed-Contrast Banner */}
             <section className={`${cardSurface} overflow-hidden`}>
-              <div className="h-[3px] w-full bg-gradient-to-r from-[#E04F33] via-[#896ABD] to-transparent" />
-              <div className="p-6 sm:p-7 flex flex-col lg:flex-row lg:items-start justify-between gap-6">
-                <div className="space-y-3 max-w-3xl">
-                  <div className="flex items-center gap-2.5 flex-wrap text-xs">
-                    <span className="px-2.5 py-0.5 rounded-md font-mono-tabular font-semibold bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C]">
-                      {off.course_code}
-                    </span>
-                    <span className="font-mono-tabular text-[#5C5B57] dark:text-[#A09F9A]">
-                      {off.programme} · Batch {off.batch_year} · Semester {off.semester} ({off.section})
-                    </span>
-                    <span className="px-2 py-0.5 rounded font-mono-tabular text-[11px] bg-black/[0.04] dark:bg-white/[0.06] text-[#5C5B57] dark:text-[#B8B6B0]">
-                      TCS iON: {off.tcs_ion_course_id || `TCS-ION-${off.course_code}`}
-                    </span>
+              {/* Visual Course Banner Strip (Custom Professor Image or Preset + Guaranteed Dark Scrim) */}
+              <div className="relative h-36 sm:h-44 w-full overflow-hidden bg-[#0F121C]">
+                <img
+                  src={getCourseBannerImage(off)}
+                  alt=""
+                  aria-hidden="true"
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    if (!target.dataset.fallback) {
+                      target.dataset.fallback = '1';
+                      target.src = '/illustrations/course-banner-1.jpg';
+                    }
+                  }}
+                  className="absolute inset-0 w-full h-full object-cover"
+                />
+                <div
+                  className="absolute inset-0"
+                  style={COURSE_BANNER_SCRIM_STYLE}
+                  aria-hidden="true"
+                />
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0"
+                  style={{
+                    background:
+                      'radial-gradient(420px circle at 88% 25%, rgba(224,79,51,0.28), transparent 62%), radial-gradient(460px circle at 18% 85%, rgba(137,106,189,0.28), transparent 60%)',
+                  }}
+                />
+                <div className="relative z-10 h-full p-5 sm:p-7 flex flex-col justify-between">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2 flex-wrap text-xs">
+                      <span className="px-2.5 py-0.5 rounded-md font-mono-tabular font-semibold bg-black/55 border border-white/25 text-white backdrop-blur-sm">
+                        {off.course_code}
+                      </span>
+                      <span
+                        className="font-mono-tabular text-white/95 font-medium"
+                        style={{ textShadow: COURSE_BANNER_TEXT_SHADOW }}
+                      >
+                        {off.programme} · Batch {off.batch_year} · Semester {off.semester} ({off.section})
+                      </span>
+                      <span className="px-2 py-0.5 rounded font-mono-tabular text-[11px] bg-black/45 border border-white/20 text-white/95 backdrop-blur-sm">
+                        TCS iON: {off.tcs_ion_course_id || `TCS-ION-${off.course_code}`}
+                      </span>
+                    </div>
+
+                    {perms.can_manage_course && (
+                      <button
+                        type="button"
+                        onClick={() => openBannerModal(off)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-black/60 hover:bg-[#E04F33] text-white border border-white/25 backdrop-blur-sm shadow-sm transition-colors"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        <span>Customize Banner</span>
+                      </button>
+                    )}
                   </div>
 
-                  <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
-                    {off.course_name}
-                  </h1>
+                  <div>
+                    <h1
+                      className="text-2xl sm:text-3xl font-bold tracking-tight text-white"
+                      style={{ textShadow: COURSE_BANNER_TEXT_SHADOW }}
+                    >
+                      {off.course_name}
+                    </h1>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 sm:p-7 flex flex-col lg:flex-row lg:items-start justify-between gap-6">
+                <div className="space-y-3 max-w-3xl">
                   {off.description && (
-                    <p className="text-xs sm:text-sm text-[#5C5B57] dark:text-[#A09F9A] max-w-2xl leading-relaxed">
+                    <p className="text-xs sm:text-sm text-[#353430] max-w-2xl leading-relaxed">
                       {off.description}
                     </p>
                   )}
@@ -821,9 +1666,36 @@ const ClassroomPage: React.FC = () => {
                     </span>
                   </div>
 
+                  {!perms.is_instructor && !perms.is_admin && !perms.is_ta && perms.my_section && (
+                    <div className="flex items-center justify-between gap-4 pt-2 border-t border-[#E5E2DC]/70 dark:border-white/10">
+                      <span className="text-[#5C5B57] dark:text-[#94938E]">Your Section</span>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded font-mono-tabular text-[11px] font-semibold bg-[#896ABD]/12 text-[#5B3B96]">
+                          {perms.my_section}
+                        </span>
+                        <StudentSectionTransferButton
+                          offeringId={Number(off.id)}
+                          currentSection={perms.my_section}
+                          sections={offeringSectionsList}
+                          onToast={showToast}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {(perms.is_instructor || perms.is_ta || perms.is_admin) && (
+                    <div className="flex items-center justify-between gap-4 pt-2 border-t border-[#E5E2DC]/70 dark:border-white/10">
+                      <span className="text-[#5C5B57] dark:text-[#94938E]">Teaching Scope</span>
+                      <span className="px-2 py-0.5 rounded font-mono-tabular text-[11px] font-semibold bg-[#896ABD]/12 text-[#5B3B96]">
+                        {isUnrestrictedStaff ? 'All Sections' : myAssignedSections.join(', ')}
+                      </span>
+                    </div>
+                  )}
+
                   {/* Strictly Student-Only TCS iON Attendance */}
                   {!perms.is_instructor &&
                     !perms.is_admin &&
+                    !perms.is_ta &&
                     (perms.is_enrolled ||
                       (perms.my_attendance_pct !== null && perms.my_attendance_pct !== undefined)) && (
                       <div className="flex items-center justify-between gap-4 pt-2 border-t border-[#E5E2DC]/70 dark:border-white/10">
@@ -890,7 +1762,7 @@ const ClassroomPage: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="pt-1.5">
+                  <div className="pt-1.5 space-y-2">
                     <Link
                       to={`/past-papers?q=${encodeURIComponent(off.course_code)}`}
                       className="w-full py-2 px-3 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-white/80 dark:bg-white/[0.04] hover:border-[#E04F33] transition-[border-color] inline-flex items-center justify-center gap-1.5 font-medium"
@@ -906,6 +1778,7 @@ const ClassroomPage: React.FC = () => {
             {/* Student Progress Overview Strip (Strictly Student-Only) */}
             {!perms.is_instructor &&
               !perms.is_admin &&
+              !perms.is_ta &&
               perms.is_enrolled &&
               (() => {
                 const asgns: any[] = Array.isArray(workspace.assignments)
@@ -989,6 +1862,127 @@ const ClassroomPage: React.FC = () => {
                 );
               })()}
 
+            {/* Staff Multi-Section Self-Selection & Cross-Section View Filter Bar */}
+            {(perms.is_instructor || perms.is_ta || perms.is_admin) && (
+              <div className={`${cardSurface} px-4 py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs`}>
+                {perms.is_instructor && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono-tabular text-[10px] uppercase tracking-wider font-semibold text-[#5C5B57]">
+                      I Teach Section(s):
+                    </span>
+                    <button
+                      type="button"
+                      disabled={savingMySections}
+                      onClick={() => toggleMySectionChip('ALL')}
+                      className={`px-2.5 py-1 rounded-lg font-mono-tabular text-[11px] font-semibold border transition-colors ${
+                        isUnrestrictedStaff
+                          ? 'bg-[#0A0A0C] text-white border-[#0A0A0C]'
+                          : 'bg-[#FAF9F6] text-[#353430] border-[#DDD8CE] hover:border-[#896ABD]'
+                      }`}
+                    >
+                      All Sections
+                    </button>
+                    {offeringSectionsList.map((sec) => {
+                      const active =
+                        !isUnrestrictedStaff &&
+                        myAssignedSections.some((s) => s.toLowerCase() === sec.toLowerCase());
+                      return (
+                        <button
+                          key={sec}
+                          type="button"
+                          disabled={savingMySections}
+                          onClick={() => toggleMySectionChip(sec)}
+                          className={`px-2.5 py-1 rounded-lg font-mono-tabular text-[11px] font-semibold border transition-colors ${
+                            active
+                              ? 'bg-[#E04F33] text-white border-[#E04F33]'
+                              : 'bg-[#FAF9F6] text-[#353430] border-[#DDD8CE] hover:border-[#896ABD]'
+                          }`}
+                        >
+                          {sec}
+                        </button>
+                      );
+                    })}
+                    <form onSubmit={handleAddCourseSection} className="inline-flex items-center gap-1 ml-1">
+                      <input
+                        type="text"
+                        value={newSectionName}
+                        onChange={(e) => setNewSectionName(e.target.value)}
+                        placeholder="+ Sec C"
+                        className="w-20 px-2 py-1 rounded-lg border border-[#DDD8CE] bg-white text-[11px] focus:outline-none focus:border-[#896ABD]"
+                      />
+                      {newSectionName.trim() && (
+                        <button
+                          type="submit"
+                          disabled={addingSection}
+                          className="px-2 py-1 rounded-lg bg-[#896ABD] text-white text-[10px] font-semibold"
+                        >
+                          Add
+                        </button>
+                      )}
+                    </form>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-mono-tabular text-[10px] uppercase tracking-wider font-semibold text-[#5C5B57] mr-1">
+                    View Filter:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSectionViewFilter('ALL')}
+                    className={`px-2.5 py-1 rounded-lg font-mono-tabular text-[11px] font-semibold border transition-colors ${
+                      sectionViewFilter === 'ALL'
+                        ? 'bg-[#896ABD] text-white border-[#896ABD]'
+                        : 'bg-white text-[#353430] border-[#DDD8CE] hover:border-[#896ABD]'
+                    }`}
+                  >
+                    All Sections
+                  </button>
+                  {offeringSectionsList.map((sec) => {
+                    const isMine =
+                      isUnrestrictedStaff ||
+                      myAssignedSections.some((s) => s.toLowerCase() === sec.toLowerCase());
+                    return (
+                      <button
+                        key={`view-${sec}`}
+                        type="button"
+                        onClick={() => setSectionViewFilter(sec)}
+                        className={`px-2.5 py-1 rounded-lg font-mono-tabular text-[11px] font-semibold border transition-colors ${
+                          sectionViewFilter.toLowerCase() === sec.toLowerCase()
+                            ? 'bg-[#896ABD] text-white border-[#896ABD]'
+                            : 'bg-white text-[#353430] border-[#DDD8CE] hover:border-[#896ABD]'
+                        }`}
+                      >
+                        {sec}
+                        {!isMine ? ' (Read-only)' : ''}
+                      </button>
+                    );
+                  })}
+                  <div className="ml-auto">
+                    <StudentPreviewBanner
+                      previewSection={studentPreviewSection}
+                      sections={offeringSectionsList}
+                      onChangePreview={(sec) => {
+                        setStudentPreviewSection(sec);
+                        if (sec) setSectionViewFilter(sec);
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {studentPreviewSection && (
+              <StudentPreviewBanner
+                previewSection={studentPreviewSection}
+                sections={offeringSectionsList}
+                onChangePreview={(sec) => {
+                  setStudentPreviewSection(sec);
+                  if (sec) setSectionViewFilter(sec);
+                }}
+              />
+            )}
+
             {/* Single-Row Scannable Navigation Tabs + Primary CTA */}
             <div className="flex items-center justify-between flex-wrap gap-3 border-b border-[#E5E2DC] dark:border-white/10 pb-3.5">
               <div className="flex items-center gap-2 flex-wrap">
@@ -997,7 +1991,9 @@ const ClassroomPage: React.FC = () => {
                     {
                       id: 'stream' as const,
                       label: 'Stream',
-                      count: workspace.announcements.length,
+                      count:
+                        (workspace.announcements?.length || 0) +
+                        (workspace.assignments?.length || 0),
                       icon: <MessageSquare className="w-3.5 h-3.5" />,
                     },
                     {
@@ -1005,6 +2001,24 @@ const ClassroomPage: React.FC = () => {
                       label: 'Classwork',
                       count: workspace.assignments.length,
                       icon: <FileCheck2 className="w-3.5 h-3.5" />,
+                    },
+                    {
+                      id: 'materials' as const,
+                      label: 'Materials',
+                      count: null,
+                      icon: <BookOpen className="w-3.5 h-3.5" />,
+                    },
+                    {
+                      id: 'quizzes' as const,
+                      label: 'Quizzes',
+                      count: null,
+                      icon: <Clock className="w-3.5 h-3.5" />,
+                    },
+                    {
+                      id: 'attendance' as const,
+                      label: 'Attendance',
+                      count: null,
+                      icon: <ListChecks className="w-3.5 h-3.5" />,
                     },
                     {
                       id: 'people' as const,
@@ -1027,10 +2041,10 @@ const ClassroomPage: React.FC = () => {
                       type="button"
                       aria-pressed={isActive}
                       onClick={() => setActiveTab(tab.id)}
-                      className={`relative px-3.5 py-2 rounded-xl text-xs font-medium inline-flex items-center gap-2 border transition-[border-color] ${
+                      className={`relative px-4 py-2.5 rounded-xl text-sm font-medium inline-flex items-center gap-2 border transition-[border-color] ${
                         isActive
                           ? 'text-[#FAF9F6] dark:text-[#0A0A0C] border-transparent'
-                          : 'bg-white/90 dark:bg-[#111117]/85 border-[#E5E2DC] dark:border-white/10 hover:border-[#896ABD]/50 text-[#0A0A0C] dark:text-[#F5F4F0]'
+                          : 'bg-white/95 dark:bg-[#13131A]/95 border-[#E5E2DC] dark:border-white/10 hover:border-[#896ABD]/50 text-[#0A0A0C] dark:text-[#F5F4F0]'
                       }`}
                     >
                       {isActive && (
@@ -1076,885 +2090,225 @@ const ClassroomPage: React.FC = () => {
 
             {/* TAB 1: STREAM */}
             {activeTab === 'stream' && (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                {/* Left Sidebar: Clean Flat Course Team Card (Zero time/hours strings) */}
-                <aside className={`${cardSurface} lg:col-span-4 p-5 space-y-4`}>
-                  <div>
-                    <h3 className="text-[11px] font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#8E8D88] font-semibold">
-                      Course Team
-                    </h3>
-                  </div>
-
-                  <div className="divide-y divide-[#E5E2DC]/70 dark:divide-white/10">
-                    {workspace.instructors.map((inst: any) => (
-                      <div key={inst.professor_id} className="py-3 first:pt-0 space-y-1.5 text-xs">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-semibold text-sm">{inst.name}</span>
-                          <span className="px-2 py-0.5 rounded font-mono-tabular text-[10px] bg-black/[0.05] dark:bg-white/[0.08] text-[#5C5B57] dark:text-[#C4C3BE]">
-                            {inst.role_label}
-                          </span>
-                        </div>
-                        <div className="text-[#5C5B57] dark:text-[#94938E]">
-                          {inst.designation}
-                        </div>
-                        <div className="space-y-1 pt-0.5">
-                          <div className="flex items-center gap-1.5 text-[#5C5B57] dark:text-[#C4C3BE]">
-                            <Mail className="w-3.5 h-3.5 text-[#896ABD] shrink-0" />
-                            <a href={`mailto:${inst.public_email}`} className="hover:underline truncate">
-                              {inst.public_email}
-                            </a>
-                          </div>
-                          {inst.public_phone && (
-                            <div className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
-                              <Phone className="w-3.5 h-3.5 shrink-0" />
-                              <a href={`tel:${inst.public_phone}`} className="hover:underline font-mono-tabular">
-                                {inst.public_phone}
-                              </a>
-                            </div>
-                          )}
-                          {inst.cabin_number && (
-                            <div className="flex items-center gap-1.5 text-[#5C5B57] dark:text-[#8E8D88]">
-                              <MapPin className="w-3.5 h-3.5 text-[#E04F33] shrink-0" />
-                              <span>{inst.cabin_number}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {workspace.tas.length > 0 && (
-                    <div className="pt-3 border-t border-[#E5E2DC] dark:border-white/10 space-y-3">
-                      <h4 className="text-[11px] font-mono-tabular uppercase tracking-wider text-emerald-700 dark:text-emerald-400 font-semibold">
-                        Teaching Assistants
-                      </h4>
-                      <div className="divide-y divide-[#E5E2DC]/70 dark:divide-white/10">
-                        {workspace.tas.map((ta: any) => (
-                          <div key={ta.id} className="py-2.5 first:pt-0 last:pb-0 text-xs space-y-1">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-semibold">{ta.public_name}</span>
-                              <span className="px-1.5 py-0.5 rounded font-mono-tabular text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold">
-                                TA
-                              </span>
-                            </div>
-                            {ta.public_batch && (
-                              <div className="text-[11px] text-[#5C5B57] dark:text-[#8E8D88]">
-                                {ta.public_batch}
-                              </div>
-                            )}
-                            <div className="flex items-center gap-1.5 text-[#5C5B57] dark:text-[#C4C3BE]">
-                              <Mail className="w-3 h-3 text-[#896ABD] shrink-0" />
-                              <a href={`mailto:${ta.public_email}`} className="hover:underline truncate">
-                                {ta.public_email}
-                              </a>
-                            </div>
-                            {ta.public_phone && (
-                              <div className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
-                                <Phone className="w-3 h-3 shrink-0" />
-                                <a href={`tel:${ta.public_phone}`} className="hover:underline font-mono-tabular">
-                                  {ta.public_phone}
-                                </a>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </aside>
-
-                {/* Right Main Column: Announcement Composer + Stream Feed */}
-                <div className="lg:col-span-8 space-y-5">
-                  {perms.can_announce ? (
-                    <form onSubmit={handlePostAnnouncement} className={`${cardSurface} p-5 space-y-3`}>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-semibold text-[#0A0A0C] dark:text-[#F5F4F0]">
-                          Announce to {off.course_code} Classroom{' '}
-                          <span className="text-[#5C5B57] dark:text-[#8E8D88] font-normal">
-                            (as {user?.name})
-                          </span>
-                        </span>
-                        <label className="flex items-center gap-1.5 text-xs text-[#5C5B57] dark:text-[#A09F9A] cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={annPinned}
-                            onChange={(e) => setAnnPinned(e.target.checked)}
-                            className="accent-[#E04F33]"
-                          />
-                          <span>Pin to top</span>
-                        </label>
-                      </div>
-                      <input
-                        type="text"
-                        value={annTitle}
-                        onChange={(e) => setAnnTitle(e.target.value)}
-                        placeholder="Announcement headline (optional)"
-                        className={inputSurface}
-                      />
-                      <textarea
-                        rows={3}
-                        required
-                        value={annContent}
-                        onChange={(e) => setAnnContent(e.target.value)}
-                        placeholder="Share lecture updates, Google Drive notes links, lab schedules, or TCS iON quiz reminders..."
-                        className={inputSurface}
-                      />
-                      <div className="flex flex-col sm:flex-row gap-2.5">
-                        <input
-                          type="url"
-                          value={annDriveUrl}
-                          onChange={(e) => setAnnDriveUrl(e.target.value)}
-                          placeholder="Optional Google Drive / Slide link (https://drive.google.com/...)"
-                          className={`${inputSurface} flex-1`}
-                        />
-                        <button
-                          type="submit"
-                          className="px-5 py-2 rounded-xl text-xs font-semibold bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] hover:bg-[#E04F33] dark:hover:bg-[#E04F33] dark:hover:text-white shrink-0"
-                        >
-                          Post Announcement
-                        </button>
-                      </div>
-                    </form>
-                  ) : (
-                    <div className={`${cardSurface} p-3.5 text-xs text-[#5C5B57] dark:text-[#A09F9A]`}>
-                      Students can comment and ask doubts on any announcement thread below. Only course professors and TAs can post new announcements.
-                    </div>
-                  )}
-
-                  {workspace.announcements.length === 0 ? (
-                    <div className={`${cardSurface} relative overflow-hidden p-8 text-center`}>
-                      <img
-                        src="/illustrations/classroom-abstract.jpg"
-                        alt=""
-                        aria-hidden="true"
-                        className="pointer-events-none select-none absolute inset-0 w-full h-full object-cover opacity-[0.06] dark:opacity-[0.1]"
-                      />
-                      <div className="relative z-10 space-y-2">
-                        <MessageSquare className="w-6 h-6 text-[#896ABD] mx-auto" />
-                        <h3 className="text-sm font-semibold">No announcements posted yet</h3>
-                        <p className="text-xs text-[#5C5B57] dark:text-[#94938E] max-w-md mx-auto">
-                          {perms.can_announce
-                            ? 'Post the first announcement above to share syllabus slides, lecture notes, or lab reminders with enrolled students.'
-                            : 'Your course professors and TAs will post updates and lecture resources here.'}
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    workspace.announcements.map((ann: any) => (
-                      <article key={ann.id} className={`${cardSurface} p-5 space-y-4`}>
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-semibold text-sm">{ann.author_name}</span>
-                              <span className="px-2 py-0.5 rounded font-mono-tabular text-[10px] font-medium bg-black/[0.05] dark:bg-white/[0.08] text-[#5C5B57] dark:text-[#C4C3BE]">
-                                {ann.author_role}
-                              </span>
-                              {ann.is_pinned && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono-tabular text-[10px] font-semibold bg-[#E04F33]/10 text-[#E04F33]">
-                                  <Pin className="w-3 h-3" /> Pinned
-                                </span>
-                              )}
-                            </div>
-                            {ann.title && <h4 className="font-semibold text-base mt-1.5">{ann.title}</h4>}
-                          </div>
-                          <span className="font-mono-tabular text-[11px] text-[#5C5B57] dark:text-[#8E8D88] shrink-0">
-                            {new Date(ann.created_at).toLocaleDateString()}
-                          </span>
-                        </div>
-
-                        <p className="text-xs sm:text-sm text-[#3A3936] dark:text-[#D0CEC8] whitespace-pre-line leading-relaxed">
-                          {ann.content}
-                        </p>
-
-                        {ann.attachment_urls?.length > 0 && (
-                          <div className="flex flex-wrap gap-2">
-                            {ann.attachment_urls.map((att: any, idx: number) => {
-                              const safeUrl = safeExternalUrl(att.url);
-                              if (!safeUrl) return null;
-                              return (
-                                <a
-                                  key={idx}
-                                  href={safeUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium bg-[#896ABD]/10 text-[#896ABD] dark:text-[#C084FC] border border-[#896ABD]/25 hover:border-[#896ABD] transition-[border-color]"
-                                >
-                                  <Link2 className="w-3.5 h-3.5" />
-                                  <span>{att.label || 'Google Drive Attachment'}</span>
-                                  <ExternalLink className="w-3 h-3" />
-                                </a>
-                              );
-                            })}
-                          </div>
-                        )}
-
-                        {/* Threaded Comments */}
-                        <div className="pt-3 border-t border-[#E5E2DC]/80 dark:border-white/10 space-y-2.5">
-                          <div className="text-[11px] font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#8E8D88]">
-                            Comments &amp; Doubts ({ann.comments?.length || 0})
-                          </div>
-
-                          {ann.comments?.map((c: any) => (
-                            <div
-                              key={c.id}
-                              className={`p-3 rounded-xl text-xs space-y-1 border ${
-                                c.is_verified_ans
-                                  ? 'bg-emerald-500/5 border-emerald-500/30'
-                                  : 'bg-[#FAF9F6] dark:bg-white/[0.02] border-[#E5E2DC]/70 dark:border-white/5'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-2 flex-wrap">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-semibold">{c.author_name}</span>
-                                  <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded bg-black/[0.05] dark:bg-white/10">
-                                    {c.author_role}
-                                  </span>
-                                  {c.is_verified_ans && (
-                                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-                                      <CheckCircle2 className="w-3 h-3" /> Verified Faculty/TA Answer
-                                    </span>
-                                  )}
-                                </div>
-                                {perms.can_announce && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleToggleVerifyComment(c.id)}
-                                    className="text-[11px] font-medium text-[#896ABD] dark:text-[#C084FC] hover:underline"
-                                  >
-                                    {c.is_verified_ans ? 'Unmark Verified' : 'Mark Verified'}
-                                  </button>
-                                )}
-                              </div>
-                              <p className="text-[#3A3936] dark:text-[#D0CEC8]">{c.content}</p>
-                            </div>
-                          ))}
-
-                          <div className="flex items-center gap-2 pt-1">
-                            <input
-                              type="text"
-                              value={commentInputs[ann.id] || ''}
-                              onChange={(e) =>
-                                setCommentInputs((prev) => ({ ...prev, [ann.id]: e.target.value }))
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  handlePostComment(ann.id);
-                                }
-                              }}
-                              placeholder="Add a class comment or ask a doubt..."
-                              className={`${inputSurface} flex-1`}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handlePostComment(ann.id)}
-                              className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] hover:bg-[#E04F33] dark:hover:bg-[#E04F33] dark:hover:text-white inline-flex items-center gap-1.5 shrink-0"
-                            >
-                              <Send className="w-3.5 h-3.5" />
-                              <span>Reply</span>
-                            </button>
-                          </div>
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </div>
+              <ClassroomStreamTab
+                workspace={workspace}
+                off={off}
+                perms={perms}
+                user={user}
+                cardSurface={cardSurface}
+                inputSurface={inputSurface}
+                offeringSectionsList={offeringSectionsList}
+                myAssignedSections={myAssignedSections}
+                isUnrestrictedStaff={isUnrestrictedStaff}
+                sectionViewFilter={sectionViewFilter}
+                setSectionViewFilter={setSectionViewFilter}
+                studentPreviewSection={studentPreviewSection}
+                annTitle={annTitle}
+                setAnnTitle={setAnnTitle}
+                annContent={annContent}
+                setAnnContent={setAnnContent}
+                annDriveUrl={annDriveUrl}
+                setAnnDriveUrl={setAnnDriveUrl}
+                annPinned={annPinned}
+                setAnnPinned={setAnnPinned}
+                annScheduledFor={annScheduledFor}
+                setAnnScheduledFor={setAnnScheduledFor}
+                annFile={annFile}
+                setAnnFile={setAnnFile}
+                annUploadProgress={annUploadProgress}
+                annUploading={annUploading}
+                annFileInputRef={annFileInputRef}
+                annTargetSections={annTargetSections}
+                setAnnTargetSections={setAnnTargetSections}
+                toggleTargetChip={toggleTargetChip}
+                commentInputs={commentInputs}
+                setCommentInputs={setCommentInputs}
+                expandedStreamIds={expandedStreamIds}
+                setExpandedStreamIds={setExpandedStreamIds}
+                syllabusInputRef={syllabusInputRef}
+                syllabusUploading={syllabusUploading}
+                syllabusViewing={syllabusViewing}
+                handleUploadSyllabusPdf={handleUploadSyllabusPdf}
+                handleOpenSyllabusPdf={handleOpenSyllabusPdf}
+                handleDeleteSyllabusPdf={handleDeleteSyllabusPdf}
+                handlePostAnnouncement={handlePostAnnouncement}
+                handlePostComment={handlePostComment}
+                handleToggleVerifyComment={handleToggleVerifyComment}
+                handleTogglePinAnnouncement={handleTogglePinAnnouncement}
+                handleToggleAllowComments={handleToggleAllowComments}
+                handleDeleteAnnouncement={handleDeleteAnnouncement}
+                handleDeleteComment={handleDeleteComment}
+                handleDeleteAssignment={handleDeleteAssignment}
+                setActiveTab={setActiveTab}
+                setSubmittingAssignment={setSubmittingAssignment}
+                setDirectLinkUrl={setDirectLinkUrl}
+                setSubmissionNotes={setSubmissionNotes}
+                setEditingAnn={setEditingAnn}
+                setEditAnnTitle={setEditAnnTitle}
+                setEditAnnContent={setEditAnnContent}
+                setEditingAsgn={setEditingAsgn}
+                setEditAsgnForm={setEditAsgnForm}
+                showToast={showToast}
+              />
             )}
 
             {/* TAB 2: CLASSWORK */}
             {activeTab === 'classwork' && (
-              <div className="space-y-5">
-                <div className={`${cardSurface} p-4 text-xs flex flex-wrap items-center justify-between gap-3`}>
-                  <div className="space-y-0.5 max-w-3xl">
-                    <div className="font-semibold flex items-center gap-1.5 text-[#0A0A0C] dark:text-[#F5F4F0]">
-                      <UploadCloud className="w-4 h-4 text-[#896ABD]" />
-                      <span>Drive Link-Only Submissions (Zero Database Bloat)</span>
-                    </div>
-                    <p className="text-[#5C5B57] dark:text-[#A09F9A]">
-                      Student uploads go directly to the student&apos;s Google Drive and auto-share with{' '}
-                      <span className="font-mono-tabular text-[#0A0A0C] dark:text-[#E2E0DC]">
-                        {workspace.auto_share_emails?.join(', ') || 'course faculty'}
-                      </span>
-                      , storing only the verified URL &amp; SHA-256 digest.
-                    </p>
-                  </div>
-                  {perms.can_announce && (
-                    <button
-                      type="button"
-                      onClick={() => setShowNewAssignmentModal(true)}
-                      className="px-4 py-2 rounded-xl bg-[#E04F33] hover:opacity-90 text-white font-semibold shrink-0 inline-flex items-center gap-1.5"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>New Assignment / Quiz</span>
-                    </button>
-                  )}
-                </div>
-
-                {/* Student Due-Soon & Pending Quick-Jump Strip */}
-                {!perms.is_instructor &&
-                  !perms.is_admin &&
-                  (() => {
-                    const pendingAsgns = (workspace.assignments || [])
-                      .filter((a: any) => !a.my_submission && a.assignment_type !== 'TCS_ION_QUIZ')
-                      .sort((a: any, b: any) => {
-                        const ta = a.due_at ? new Date(a.due_at).getTime() : Number.MAX_SAFE_INTEGER;
-                        const tb = b.due_at ? new Date(b.due_at).getTime() : Number.MAX_SAFE_INTEGER;
-                        return ta - tb;
-                      });
-                    if (pendingAsgns.length === 0) return null;
-                    return (
-                      <div className={`${cardSurface} p-4 space-y-2.5 border-[#E04F33]/35`}>
-                        <div className="flex items-center justify-between gap-2 text-xs">
-                          <span className="inline-flex items-center gap-1.5 font-semibold text-[#E04F33]">
-                            <Clock className="w-3.5 h-3.5" />
-                            <span>Pending Submissions ({pendingAsgns.length})</span>
-                          </span>
-                          <span className="font-mono-tabular text-[11px] text-[#5C5B57] dark:text-[#A09F9A]">
-                            Click to jump directly
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {pendingAsgns.slice(0, 4).map((a: any) => (
-                            <button
-                              key={a.id}
-                              type="button"
-                              onClick={() => {
-                                document.getElementById(`assignment-${a.id}`)?.scrollIntoView({
-                                  behavior: reducedMotion ? 'auto' : 'smooth',
-                                  block: 'center',
-                                });
-                              }}
-                              className="px-3 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-white/[0.04] hover:border-[#E04F33] text-xs font-mono-tabular inline-flex items-center gap-2 transition-[border-color]"
-                            >
-                              <span className="font-medium text-[#0A0A0C] dark:text-[#F5F4F0] truncate max-w-[180px]">
-                                {a.title}
-                              </span>
-                              {a.due_at && (
-                                <span className="text-[10px] text-[#E04F33]">
-                                  Due {new Date(a.due_at).toLocaleDateString()}
-                                </span>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                {workspace.assignments.length === 0 ? (
-                  <div className={`${cardSurface} relative overflow-hidden p-10 text-center`}>
-                    <img
-                      src="/illustrations/classroom-abstract.jpg"
-                      alt=""
-                      aria-hidden="true"
-                      className="pointer-events-none select-none absolute inset-0 w-full h-full object-cover opacity-[0.06] dark:opacity-[0.1]"
-                    />
-                    <div className="relative z-10 space-y-3">
-                      <FileCheck2 className="w-7 h-7 text-[#896ABD] mx-auto" />
-                      <h3 className="text-base font-semibold">No assignments or quizzes published yet</h3>
-                      <p className="text-xs text-[#5C5B57] dark:text-[#94938E] max-w-md mx-auto">
-                        {perms.can_announce
-                          ? 'Publish an assignment, lab sheet, or TCS iON proctored quiz to begin collecting student submissions.'
-                          : 'Assignments and TCS iON quizzes posted by your instructor will appear here.'}
-                      </p>
-                      {perms.can_announce && (
-                        <button
-                          type="button"
-                          onClick={() => setShowNewAssignmentModal(true)}
-                          className="px-4 py-2 rounded-xl bg-[#E04F33] text-white text-xs font-semibold inline-flex items-center gap-1.5"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>Publish First Assignment</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  workspace.assignments.map((asgn: any) => {
-                    const isTcsQuiz = asgn.assignment_type === 'TCS_ION_QUIZ';
-                    const mySub = asgn.my_submission;
-                    const problemLink = asgn.resource_links?.[0]?.url || asgn.resource_url;
-
-                    return (
-                      <article
-                        key={asgn.id}
-                        id={`assignment-${asgn.id}`}
-                        className={`${cardSurface} p-6 space-y-4`}
-                      >
-                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                          <div className="space-y-1.5">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span
-                                className={`px-2.5 py-0.5 rounded font-mono-tabular text-[10px] font-semibold uppercase ${
-                                  isTcsQuiz
-                                    ? 'bg-[#896ABD]/15 text-[#896ABD] dark:text-[#C084FC]'
-                                    : 'bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C]'
-                                }`}
-                              >
-                                {isTcsQuiz ? 'TCS iON Quiz' : asgn.assignment_type}
-                              </span>
-                              {asgn.topic_module && (
-                                <span className="text-xs text-[#5C5B57] dark:text-[#94938E]">
-                                  {asgn.topic_module}
-                                </span>
-                              )}
-                              <span className="font-mono-tabular text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                                {asgn.max_marks} Marks
-                              </span>
-                              {asgn.tcs_ion_exam_code && (
-                                <span className="text-[11px] font-mono-tabular px-2 py-0.5 rounded bg-black/[0.05] dark:bg-white/[0.08]">
-                                  Code: {asgn.tcs_ion_exam_code}
-                                </span>
-                              )}
-                            </div>
-                            <h3 className="text-lg font-semibold">{asgn.title}</h3>
-                            {asgn.description && (
-                              <p className="text-xs sm:text-sm text-[#5C5B57] dark:text-[#A09F9A] leading-relaxed">
-                                {asgn.description}
-                              </p>
-                            )}
-                            {safeExternalUrl(problemLink) && (
-                              <div className="pt-1">
-                                <a
-                                  href={safeExternalUrl(problemLink)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1.5 text-xs font-medium text-[#896ABD] dark:text-[#C084FC] hover:underline"
-                                >
-                                  <Link2 className="w-3.5 h-3.5" />
-                                  <span>Problem Statement / Reference</span>
-                                  <ExternalLink className="w-3 h-3" />
-                                </a>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Role-Aware Action Slot */}
-                          <div className="flex flex-col items-end gap-2 shrink-0">
-                            {isTcsQuiz && safeExternalUrl(asgn.tcs_ion_launch_url) ? (
-                              <a
-                                href={safeExternalUrl(asgn.tcs_ion_launch_url)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] hover:bg-[#896ABD] dark:hover:bg-[#896ABD] dark:hover:text-white inline-flex items-center gap-2 shadow-sm"
-                              >
-                                <span>Launch TCS iON Quiz</span>
-                                <ExternalLink className="w-3.5 h-3.5" />
-                              </a>
-                            ) : !perms.is_instructor && !perms.is_admin ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSubmittingAssignment(asgn);
-                                  setDirectLinkUrl(mySub?.submission_url || '');
-                                  setSubmissionNotes(mySub?.submission_notes || '');
-                                }}
-                                className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#E04F33] hover:opacity-90 text-white inline-flex items-center gap-2 shadow-sm"
-                              >
-                                <UploadCloud className="w-4 h-4" />
-                                <span>{mySub ? 'Update Submission' : 'Submit Assignment'}</span>
-                              </button>
-                            ) : (
-                              <span className="px-3 py-1.5 rounded-lg font-mono-tabular text-xs font-medium bg-black/[0.04] dark:bg-white/[0.06] text-[#5C5B57] dark:text-[#C4C3BE]">
-                                {asgn.submissions?.length || asgn.submission_count || 0} Submissions
-                              </span>
-                            )}
-                            {asgn.due_at && (
-                              <span className="font-mono-tabular text-[11px] text-[#5C5B57] dark:text-[#8E8D88]">
-                                Due {new Date(asgn.due_at).toLocaleDateString()}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Student's Own Submission Status Box */}
-                        {mySub && (
-                          <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-xs space-y-2">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="flex items-center gap-2">
-                                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                                <span className="font-semibold">
-                                  Your Submission (
-                                  {mySub.upload_mode === 'GOOGLE_DRIVE_AUTO'
-                                    ? 'Google Drive Auto-Share'
-                                    : 'Direct Link'}
-                                  )
-                                </span>
-                              </div>
-                              {mySub.marks_obtained !== null && mySub.marks_obtained !== undefined ? (
-                                <span className="px-2.5 py-0.5 rounded-md font-mono-tabular bg-emerald-600 text-white font-semibold">
-                                  Graded: {mySub.marks_obtained} / {asgn.max_marks}
-                                </span>
-                              ) : (
-                                <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 font-medium">
-                                  Submitted · Pending Grade
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-3">
-                              {safeExternalUrl(mySub.submission_url) ? (
-                                <a
-                                  href={safeExternalUrl(mySub.submission_url)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1.5 font-medium text-[#896ABD] dark:text-[#C084FC] hover:underline break-all"
-                                >
-                                  <Link2 className="w-3.5 h-3.5 shrink-0" />
-                                  <span>{mySub.file_name || mySub.submission_url}</span>
-                                  <ExternalLink className="w-3 h-3 shrink-0" />
-                                </a>
-                              ) : (
-                                <span className="text-rose-600 dark:text-rose-400 text-xs">
-                                  Invalid submission link
-                                </span>
-                              )}
-                              {mySub.file_sha256 && (
-                                <span
-                                  title={`Verified SHA-256: ${mySub.file_sha256}`}
-                                  className="px-2 py-0.5 rounded font-mono-tabular text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                                >
-                                  SHA-256: {String(mySub.file_sha256).slice(0, 12)}…
-                                </span>
-                              )}
-                            </div>
-                            {mySub.feedback && (
-                              <div className="text-[#3A3936] dark:text-[#E2E0DC] pt-1.5 border-t border-emerald-500/20">
-                                <strong>Feedback ({mySub.graded_by_name}):</strong> {mySub.feedback}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Professor / TA View: All Student Drive Link Submissions */}
-                        {perms.can_grade && asgn.submissions && asgn.submissions.length > 0 && (
-                          <div className="pt-3 border-t border-[#E5E2DC]/80 dark:border-white/10 space-y-2.5">
-                            <div className="text-xs font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#8E8D88] font-semibold">
-                              Student Submissions ({asgn.submissions.length})
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                              {asgn.submissions.map((sub: any) => (
-                                <div
-                                  key={sub.id}
-                                  className="p-3.5 rounded-xl bg-[#FAF9F6] dark:bg-white/[0.03] border border-[#E5E2DC]/80 dark:border-white/10 text-xs flex items-center justify-between gap-3"
-                                >
-                                  <div className="space-y-0.5 min-w-0">
-                                    <div className="font-semibold truncate">
-                                      {sub.student_name} ({sub.student_roll_no || sub.student_email})
-                                    </div>
-                                    {safeExternalUrl(sub.submission_url) ? (
-                                      <a
-                                        href={safeExternalUrl(sub.submission_url)}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-[#896ABD] dark:text-[#C084FC] hover:underline inline-flex items-center gap-1 truncate max-w-full"
-                                      >
-                                        <Link2 className="w-3 h-3 shrink-0" />
-                                        <span className="truncate">{sub.file_name || sub.submission_url}</span>
-                                      </a>
-                                    ) : (
-                                      <span className="text-rose-600 dark:text-rose-400 text-[11px]">
-                                        Blocked unsafe URL
-                                      </span>
-                                    )}
-                                    <div className="text-[10px] font-mono-tabular text-[#5C5B57] dark:text-[#8E8D88]">
-                                      {sub.upload_mode} · {sub.shared_with_prof ? 'Shared' : 'Link'}
-                                      {sub.file_sha256 ? ` · SHA-256: ${String(sub.file_sha256).slice(0, 10)}…` : ''}
-                                    </div>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setGradingSub({ ...sub, max_marks: asgn.max_marks });
-                                      setGradeMarks(
-                                        sub.marks_obtained !== null && sub.marks_obtained !== undefined
-                                          ? String(sub.marks_obtained)
-                                          : ''
-                                      );
-                                      setGradeFeedback(sub.feedback || '');
-                                    }}
-                                    className="px-3 py-1.5 rounded-lg bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] hover:bg-[#E04F33] dark:hover:bg-[#E04F33] dark:hover:text-white font-semibold shrink-0"
-                                  >
-                                    {sub.marks_obtained !== null && sub.marks_obtained !== undefined
-                                      ? `${sub.marks_obtained}/${asgn.max_marks} · Edit`
-                                      : 'Grade'}
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </article>
-                    );
-                  })
-                )}
-              </div>
+              <ClassroomClassworkTab
+                workspace={workspace}
+                off={off}
+                perms={perms}
+                cardSurface={cardSurface}
+                sectionViewFilter={sectionViewFilter}
+                reducedMotion={reducedMotion}
+                similarityReports={similarityReports}
+                setSimilarityReports={setSimilarityReports}
+                similarityLoadingId={similarityLoadingId}
+                setSimilarityLoadingId={setSimilarityLoadingId}
+                loadWorkspace={loadWorkspace}
+                handleDeleteAssignment={handleDeleteAssignment}
+                setShowNewAssignmentModal={setShowNewAssignmentModal}
+                setSubmittingAssignment={setSubmittingAssignment}
+                setDirectLinkUrl={setDirectLinkUrl}
+                setSubmissionNotes={setSubmissionNotes}
+                setEditingAsgn={setEditingAsgn}
+                setEditAsgnForm={setEditAsgnForm}
+                setGroupModalAsgn={setGroupModalAsgn}
+                setDrawerTarget={setDrawerTarget}
+                setGradingSub={setGradingSub}
+                setGradeMarks={setGradeMarks}
+                setGradeFeedback={setGradeFeedback}
+                showToast={showToast}
+              />
             )}
 
             {/* TAB 3: PEOPLE (Zero emojis, zero time/hours strings) */}
             {activeTab === 'people' && (
-              <div className="space-y-6">
-                {/* Co-Professors Section */}
-                <section className={`${cardSurface} p-6 space-y-4`}>
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <h3 className="text-base font-semibold">
-                        Course Professors &amp; Co-Instructors ({workspace.instructors.length})
-                      </h3>
-                      <p className="text-xs text-[#5C5B57] dark:text-[#94938E]">
-                        Multiple professors can co-teach a course and manage classrooms together.
-                      </p>
-                    </div>
-                    {perms.can_manage_course && (
-                      <form onSubmit={handleAddCoProfessor} className="flex flex-wrap items-center gap-2 text-xs">
-                        <input
-                          type="email"
-                          required
-                          value={coProfEmail}
-                          onChange={(e) => setCoProfEmail(e.target.value)}
-                          placeholder="Co-Professor Email (@jklu.edu.in)"
-                          className="px-3 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 focus:outline-none focus:border-[#896ABD]"
-                        />
-                        <input
-                          type="text"
-                          value={coProfRole}
-                          onChange={(e) => setCoProfRole(e.target.value)}
-                          placeholder="Role (e.g. Co-Instructor)"
-                          className="px-3 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 focus:outline-none focus:border-[#896ABD] w-40"
-                        />
-                        <button
-                          type="submit"
-                          className="px-3 py-1.5 rounded-lg bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] font-semibold inline-flex items-center gap-1"
-                        >
-                          <UserPlus className="w-3.5 h-3.5" />
-                          <span>Add Co-Professor</span>
-                        </button>
-                      </form>
-                    )}
-                  </div>
+              <ClassroomPeopleTab
+                workspace={workspace}
+                off={off}
+                perms={perms}
+                user={user}
+                cardSurface={cardSurface}
+                offeringSectionsList={offeringSectionsList}
+                myAssignedSections={myAssignedSections}
+                isUnrestrictedStaff={isUnrestrictedStaff}
+                sectionViewFilter={sectionViewFilter}
+                studentPreviewSection={studentPreviewSection}
+                coProfEmail={coProfEmail}
+                setCoProfEmail={setCoProfEmail}
+                coProfRole={coProfRole}
+                setCoProfRole={setCoProfRole}
+                coProfSection={coProfSection}
+                setCoProfSection={setCoProfSection}
+                taSection={taSection}
+                setTaSection={setTaSection}
+                newTaForm={newTaForm}
+                setNewTaForm={setNewTaForm}
+                rosterDefaultSection={rosterDefaultSection}
+                setRosterDefaultSection={setRosterDefaultSection}
+                rosterUploading={rosterUploading}
+                rosterUploadResult={rosterUploadResult}
+                setRosterUploadResult={setRosterUploadResult}
+                rosterInputRef={rosterInputRef}
+                loadWorkspace={loadWorkspace}
+                loadOfferingsList={loadOfferingsList}
+                handleSelectOffering={handleSelectOffering}
+                handleAddCoProfessor={handleAddCoProfessor}
+                handleUpdateInstructorSection={handleUpdateInstructorSection}
+                handleRemoveInstructor={handleRemoveInstructor}
+                handleAddCourseTA={handleAddCourseTA}
+                handleToggleTaPerm={handleToggleTaPerm}
+                handleRemoveTa={handleRemoveTa}
+                handleUpdateStudentSection={handleUpdateStudentSection}
+                handleRemoveStudent={handleRemoveStudent}
+                handleUploadRosterFile={handleUploadRosterFile}
+                showToast={showToast}
+              />
+            )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {workspace.instructors.map((inst: any) => (
-                      <div
-                        key={inst.professor_id}
-                        className="p-4 rounded-xl border border-[#E5E2DC]/80 dark:border-white/10 bg-[#FAF9F6] dark:bg-white/[0.02] text-xs space-y-2"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-semibold text-sm">{inst.name}</span>
-                          <span className="px-2 py-0.5 rounded font-mono-tabular text-[10px] bg-black/[0.05] dark:bg-white/[0.08] font-medium">
-                            {inst.role_label}
-                          </span>
-                        </div>
-                        <div className="text-[#5C5B57] dark:text-[#94938E]">
-                          {inst.designation} · School of {inst.school}
-                        </div>
-                        <div className="flex flex-wrap gap-4 pt-0.5">
-                          <a
-                            href={`mailto:${inst.public_email}`}
-                            className="inline-flex items-center gap-1.5 text-[#896ABD] dark:text-[#C084FC] hover:underline"
-                          >
-                            <Mail className="w-3.5 h-3.5 shrink-0" />
-                            <span>{inst.public_email}</span>
-                          </a>
-                          {inst.public_phone && (
-                            <a
-                              href={`tel:${inst.public_phone}`}
-                              className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-mono-tabular font-medium hover:underline"
-                            >
-                              <Phone className="w-3.5 h-3.5 shrink-0" />
-                              <span>{inst.public_phone}</span>
-                            </a>
-                          )}
-                        </div>
-                        {inst.cabin_number && (
-                          <div className="flex items-center gap-1.5 text-[#5C5B57] dark:text-[#8E8D88]">
-                            <MapPin className="w-3.5 h-3.5 text-[#E04F33] shrink-0" />
-                            <span>{inst.cabin_number}</span>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </section>
+            {/* TAB: STRUCTURED MATERIALS, MODULES & AUTO-LINKED PAST PAPERS */}
+            {activeTab === 'materials' && (
+              <ModulesResourcesTab
+                offeringId={Number(off.id)}
+                courseCode={off.course_code}
+                isStaff={Boolean(perms.is_instructor || perms.is_admin || perms.is_ta)}
+                canCreate={Boolean(perms.can_announce || perms.can_manage_course)}
+                allowedSections={isUnrestrictedStaff ? offeringSectionsList : myAssignedSections}
+                previewSection={studentPreviewSection}
+                onToast={showToast}
+              />
+            )}
 
-                {/* Course TAs Section */}
-                <section className={`${cardSurface} p-6 space-y-4`}>
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="text-base font-semibold">
-                          Course Teaching Assistants ({workspace.tas.length})
-                        </h3>
-                        <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25 font-medium">
-                          Public TA Contact Card Only
-                        </span>
-                      </div>
-                      <p className="text-xs text-[#5C5B57] dark:text-[#94938E] mt-0.5">
-                        Public contact email and phone for course doubt support; the TA&apos;s personal student profile stays isolated.
-                      </p>
-                    </div>
-                  </div>
+            {/* TAB: IN-PORTAL TIMED QUIZZES */}
+            {activeTab === 'quizzes' && (
+              <QuizEnginePanel
+                offeringId={Number(off.id)}
+                courseCode={off.course_code}
+                isStaff={Boolean(perms.is_instructor || perms.is_admin || perms.is_ta)}
+                canCreate={Boolean(perms.can_announce || perms.can_manage_course)}
+                allowedSections={isUnrestrictedStaff ? offeringSectionsList : myAssignedSections}
+                previewSection={studentPreviewSection}
+                onRefreshWorkspace={() => loadWorkspace(Number(off.id), { forceSilent: true })}
+                onToast={showToast}
+              />
+            )}
 
-                  {perms.can_manage_course && (
-                    <form
-                      onSubmit={handleAddCourseTA}
-                      className="p-3.5 rounded-xl bg-[#FAF9F6] dark:bg-white/[0.02] border border-[#E5E2DC]/80 dark:border-white/10 grid grid-cols-1 sm:grid-cols-5 gap-2 text-xs"
-                    >
-                      <input
-                        type="text"
-                        required
-                        placeholder="TA Public Name"
-                        value={newTaForm.public_name}
-                        onChange={(e) => setNewTaForm({ ...newTaForm, public_name: e.target.value })}
-                        className="px-2.5 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]/80 focus:outline-none focus:border-[#896ABD]"
-                      />
-                      <input
-                        type="email"
-                        required
-                        placeholder="TA Official Email"
-                        value={newTaForm.public_email}
-                        onChange={(e) => setNewTaForm({ ...newTaForm, public_email: e.target.value })}
-                        className="px-2.5 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]/80 focus:outline-none focus:border-[#896ABD]"
-                      />
-                      <input
-                        type="text"
-                        placeholder="TA Contact Phone"
-                        value={newTaForm.public_phone}
-                        onChange={(e) => setNewTaForm({ ...newTaForm, public_phone: e.target.value })}
-                        className="px-2.5 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]/80 focus:outline-none focus:border-[#896ABD]"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Batch (e.g. B.Tech Year 4)"
-                        value={newTaForm.public_batch}
-                        onChange={(e) => setNewTaForm({ ...newTaForm, public_batch: e.target.value })}
-                        className="px-2.5 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]/80 focus:outline-none focus:border-[#896ABD]"
-                      />
-                      <button
-                        type="submit"
-                        className="px-3 py-1.5 rounded-lg bg-[#E04F33] hover:opacity-90 text-white font-semibold"
-                      >
-                        + Assign TA
-                      </button>
-                    </form>
-                  )}
-
-                  {workspace.tas.length === 0 ? (
-                    <p className="text-xs text-[#5C5B57] dark:text-[#94938E]">
-                      No TAs assigned to this course yet.
-                    </p>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {workspace.tas.map((ta: any) => (
-                        <div
-                          key={ta.id}
-                          className="p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20 text-xs space-y-1.5"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-semibold text-sm">{ta.public_name}</span>
-                            <span className="px-2 py-0.5 rounded font-mono-tabular text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold">
-                              Teaching Assistant
-                            </span>
-                          </div>
-                          {ta.public_batch && (
-                            <div className="text-[#5C5B57] dark:text-[#94938E]">{ta.public_batch}</div>
-                          )}
-                          <div className="flex flex-wrap gap-4 pt-0.5">
-                            <a
-                              href={`mailto:${ta.public_email}`}
-                              className="inline-flex items-center gap-1.5 text-[#896ABD] dark:text-[#C084FC] hover:underline"
-                            >
-                              <Mail className="w-3.5 h-3.5 shrink-0" />
-                              <span>{ta.public_email}</span>
-                            </a>
-                            {ta.public_phone && (
-                              <a
-                                href={`tel:${ta.public_phone}`}
-                                className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-mono-tabular font-medium hover:underline"
-                              >
-                                <Phone className="w-3.5 h-3.5 shrink-0" />
-                                <span>{ta.public_phone}</span>
-                              </a>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </section>
-
-                {/* Enrolled Students Roster */}
-                <section className={`${cardSurface} p-6 space-y-4`}>
-                  <div>
-                    <h3 className="text-base font-semibold">
-                      Registered Student Roster ({workspace.roster_count})
-                    </h3>
-                    <p className="text-xs text-[#5C5B57] dark:text-[#94938E]">
-                      Auto-enrolled for {off.programme} Semester {off.semester} + synced from TCS iON Course Registration.
-                    </p>
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead>
-                        <tr className="border-b border-[#E5E2DC] dark:border-white/10 text-[#5C5B57] dark:text-[#8E8D88] font-mono-tabular text-[11px] uppercase">
-                          <th className="py-2 pr-4">Roll No</th>
-                          <th className="py-2 pr-4">Student Name</th>
-                          <th className="py-2 pr-4">Section</th>
-                          <th className="py-2 pr-4">Source</th>
-                          {perms.can_grade && <th className="py-2 pr-4">TCS iON Attendance</th>}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {workspace.roster.map((r: any) => (
-                          <tr
-                            key={r.id}
-                            className="border-b border-[#E5E2DC]/60 dark:border-white/5 last:border-b-0"
-                          >
-                            <td className="py-2.5 pr-4 font-mono-tabular font-semibold">
-                              {r.roll_no || 'AUTO'}
-                            </td>
-                            <td className="py-2.5 pr-4 font-medium">{r.student_name}</td>
-                            <td className="py-2.5 pr-4">{r.section || 'Sec A'}</td>
-                            <td className="py-2.5 pr-4">
-                              <span className="px-2 py-0.5 rounded font-mono-tabular text-[10px] font-medium bg-black/[0.05] dark:bg-white/[0.08]">
-                                {r.enroll_source}
-                              </span>
-                            </td>
-                            {perms.can_grade && (
-                              <td className="py-2.5 pr-4 font-mono-tabular">
-                                {r.attendance_pct !== null && r.attendance_pct !== undefined ? (
-                                  <span
-                                    className={`inline-flex items-center gap-1 font-semibold ${
-                                      Number(r.attendance_pct) < 75
-                                        ? 'text-rose-600 dark:text-rose-400'
-                                        : 'text-emerald-600 dark:text-emerald-400'
-                                    }`}
-                                  >
-                                    <span>{r.attendance_pct}%</span>
-                                    {Number(r.attendance_pct) < 75 && (
-                                      <AlertTriangle className="w-3.5 h-3.5" />
-                                    )}
-                                  </span>
-                                ) : (
-                                  <span className="text-[#5C5B57] dark:text-[#8E8D88] text-[11px]">
-                                    Not synced
-                                  </span>
-                                )}
-                              </td>
-                            )}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-              </div>
+            {/* TAB: DAILY ATTENDANCE, PIN/QR CHECK-IN & OD LEAVE */}
+            {activeTab === 'attendance' && (
+              <AttendancePanel
+                offeringId={Number(off.id)}
+                isStaff={Boolean(perms.is_instructor || perms.is_admin || perms.is_ta)}
+                canManage={Boolean(perms.can_manage_course)}
+                allowedSections={isUnrestrictedStaff ? offeringSectionsList : myAssignedSections}
+                sectionFilter={sectionViewFilter}
+                roster={workspace.roster || []}
+                previewSection={studentPreviewSection}
+                onRefreshWorkspace={() => loadWorkspace(Number(off.id), { forceSilent: true })}
+                onToast={showToast}
+              />
             )}
 
             {/* TAB 4: TCS iON BRIDGE & GOOGLE DRIVE GRADEBOOK */}
             {activeTab === 'tcs_gradebook' && (
               <div className="space-y-6">
+                {((!perms.can_grade && !perms.can_manage_course) || studentPreviewSection) && (
+                  <MyGradesAttendancePanel
+                    offeringId={Number(off.id)}
+                    previewSection={studentPreviewSection}
+                    onToast={showToast}
+                  />
+                )}
+
+                {/* Interactive Excel Marks Sheet & Offline .xlsx Download / Upload (Faculty & Grading TAs) */}
+                {(perms.can_manage_course || perms.can_grade) && !studentPreviewSection && (
+                  <>
+                    <ExcelMarksSheet
+                      offeringId={Number(off.id)}
+                      courseCode={off.course_code}
+                      roster={workspace.roster || []}
+                      assignments={workspace.assignments || []}
+                      sections={offeringSectionsList}
+                      assignedSections={myAssignedSections}
+                      onMarksSaved={async () => {
+                        await loadWorkspace(Number(off.id), { forceSilent: true });
+                        await loadOfferingsList(true);
+                      }}
+                      showToast={showToast}
+                    />
+                    <GradebookExtrasPanel
+                      offeringId={Number(off.id)}
+                      reevalEnabledInitial={off.reeval_enabled !== false}
+                      gradeWeightsInitial={off.grade_weights}
+                      assignments={workspace.assignments || []}
+                      sectionFilter={sectionViewFilter}
+                      canManageCourse={Boolean(perms.can_manage_course)}
+                      onRefreshWorkspace={() => loadWorkspace(Number(off.id), { forceSilent: true })}
+                      onToast={showToast}
+                    />
+                  </>
+                )}
+
                 {/* Staff Cohort Analytics & Histograms */}
                 {(perms.can_grade || perms.can_manage_course) && analytics && (
                   <section className={`${cardSurface} p-6 space-y-6`}>
@@ -2051,8 +2405,8 @@ const ClassroomPage: React.FC = () => {
                                 </div>
                                 <div className="h-2 rounded-full bg-[#E5E2DC]/70 dark:bg-white/10 overflow-hidden">
                                   <div
-                                    className="h-full rounded-full bg-[#896ABD] transition-all duration-300"
-                                    style={{ width: `${ratePct !== null ? Math.max(4, ratePct) : 0}%` }}
+                                    className="h-full w-full origin-left rounded-full bg-[#896ABD] transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]"
+                                    style={{ transform: `scaleX(${Math.max(0, Math.min(1, (ratePct !== null ? Math.max(4, ratePct) : 0) / 100))})` }}
                                   />
                                 </div>
                               </button>
@@ -2187,443 +2541,242 @@ const ClassroomPage: React.FC = () => {
                   )}
                 </section>
 
-                <section className={`${cardSurface} lg:col-span-6 p-6 space-y-4`}>
-                  <div>
-                    <span className="font-mono-tabular text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
-                      Zero-Bloat Architecture
-                    </span>
-                    <h3 className="text-lg font-semibold mt-1.5">
-                      Google Drive Link-Only Storage Telemetry
-                    </h3>
-                    <p className="text-xs text-[#5C5B57] dark:text-[#94938E] mt-1">
-                      Every student file is uploaded straight from the browser to the student&apos;s own Google Drive and auto-shared with course faculty.
-                    </p>
-                  </div>
+                {perms.can_manage_course || perms.can_grade ? (
+                  <section className={`${cardSurface} lg:col-span-6 p-6 space-y-4`}>
+                    <div>
+                      <span className="font-mono-tabular text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-700">
+                        Zero-Bloat Architecture
+                      </span>
+                      <h3 className="text-lg font-semibold mt-1.5">
+                        Google Drive Link-Only Storage Telemetry
+                      </h3>
+                      <p className="text-xs text-[#353430] mt-1">
+                        Every student file is uploaded straight from the browser to their Drive and shared with course faculty.
+                      </p>
+                    </div>
 
-                  <div className="grid grid-cols-2 gap-3 text-xs">
-                    <div className="p-3.5 rounded-xl bg-[#FAF9F6] dark:bg-white/[0.03] border border-[#E5E2DC]/80 dark:border-white/10">
-                      <div className="text-[#5C5B57] dark:text-[#8E8D88]">DB Storage per Submission</div>
-                      <div className="text-xl font-mono-tabular font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                        ~250 Bytes
+                    <div className="grid grid-cols-2 gap-3 text-xs">
+                      <div className="p-3.5 rounded-xl bg-[#FAF9F6] border border-[#E5E2DC]">
+                        <div className="text-[#353430]">DB Storage per Submission</div>
+                        <div className="text-xl font-mono-tabular font-semibold text-emerald-700 mt-0.5">
+                          ~250 Bytes
+                        </div>
+                        <div className="text-[11px] text-[#44433E]">
+                          Text URL only (0 MB blobs)
+                        </div>
                       </div>
-                      <div className="text-[11px] text-[#5C5B57] dark:text-[#8E8D88]">
-                        Text URL only (0 MB blobs)
+                      <div className="p-3.5 rounded-xl bg-[#FAF9F6] border border-[#E5E2DC]">
+                        <div className="text-[#353430]">Backend File Bandwidth</div>
+                        <div className="text-xl font-mono-tabular font-semibold text-emerald-700 mt-0.5">
+                          0.00 MB
+                        </div>
+                        <div className="text-[11px] text-[#44433E]">
+                          Direct Browser → Drive Link
+                        </div>
                       </div>
                     </div>
-                    <div className="p-3.5 rounded-xl bg-[#FAF9F6] dark:bg-white/[0.03] border border-[#E5E2DC]/80 dark:border-white/10">
-                      <div className="text-[#5C5B57] dark:text-[#8E8D88]">Backend File Bandwidth</div>
-                      <div className="text-xl font-mono-tabular font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                        0.00 MB
-                      </div>
-                      <div className="text-[11px] text-[#5C5B57] dark:text-[#8E8D88]">
-                        Direct Browser → Google Drive
-                      </div>
-                    </div>
-                  </div>
 
-                  <div className="p-3.5 rounded-xl bg-[#FAF9F6] dark:bg-white/[0.03] border border-[#E5E2DC]/80 dark:border-white/10 text-xs space-y-1">
-                    <div className="font-semibold text-[#0A0A0C] dark:text-[#F5F4F0]">
-                      Auto-Shared Faculty &amp; TA Drive Recipients
+                    <div className="p-3.5 rounded-xl bg-[#FAF9F6] border border-[#E5E2DC] text-xs space-y-1">
+                      <div className="font-semibold text-[#0A0A0C]">
+                        Auto-Shared Faculty &amp; TA Recipients
+                      </div>
+                      <div className="font-mono-tabular text-[11px] text-[#353430]">
+                        {workspace.auto_share_emails?.join(' · ') || 'No faculty emails'}
+                      </div>
                     </div>
-                    <div className="font-mono-tabular text-[11px] text-[#5C5B57] dark:text-[#C4C3BE]">
-                      {workspace.auto_share_emails?.join(' · ') || 'No faculty emails'}
+                  </section>
+                ) : (
+                  <section className={`${cardSurface} lg:col-span-6 p-6 space-y-4`}>
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div>
+                        <span className="font-mono-tabular text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/12 text-emerald-800">
+                          Student Gradebook Summary
+                        </span>
+                        <h3 className="text-lg font-semibold mt-1.5 text-[#0A0A0C]">
+                          Your Assignment Grades &amp; Attendance
+                        </h3>
+                      </div>
+                      <div className="px-3 py-1.5 rounded-xl bg-[#FAF9F6] border border-[#DDD8CE] text-xs font-mono-tabular">
+                        Attendance:{' '}
+                        <strong
+                          className={
+                            perms.my_attendance_pct !== null &&
+                            perms.my_attendance_pct !== undefined &&
+                            perms.my_attendance_pct < 75
+                              ? 'text-rose-700'
+                              : 'text-emerald-700'
+                          }
+                        >
+                          {perms.my_attendance_pct !== null && perms.my_attendance_pct !== undefined
+                            ? `${perms.my_attendance_pct}%`
+                            : 'Not Synced'}
+                        </strong>
+                      </div>
                     </div>
-                  </div>
-                </section>
+
+                    {workspace.assignments.length === 0 ? (
+                      <p className="text-xs text-[#353430] py-4">
+                        No graded classwork items published yet in this course.
+                      </p>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {workspace.assignments.map((asgn: any) => {
+                          const mySub = asgn.my_submission;
+                          const hasMarks =
+                            mySub &&
+                            mySub.marks_obtained !== null &&
+                            mySub.marks_obtained !== undefined;
+                          const maxM = Number(asgn.max_marks || 100);
+                          const pct =
+                            hasMarks && maxM > 0
+                              ? Math.round((Number(mySub.marks_obtained) / maxM) * 100)
+                              : null;
+
+                          return (
+                            <div
+                              key={asgn.id}
+                              className="p-3.5 rounded-xl bg-[#FAF9F6] border border-[#DDD8CE] text-xs space-y-1.5"
+                            >
+                              <div className="flex items-start justify-between gap-2 flex-wrap">
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-semibold text-sm text-[#0A0A0C] truncate">
+                                    {asgn.title}
+                                  </div>
+                                  <div className="font-mono-tabular text-[11px] text-[#353430]">
+                                    {asgn.assignment_type} · Max {maxM} marks
+                                    {asgn.due_at
+                                      ? ` · Due ${new Date(asgn.due_at).toLocaleDateString()}`
+                                      : ''}
+                                  </div>
+                                </div>
+
+                                {hasMarks ? (
+                                  <span className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-mono-tabular font-semibold shrink-0">
+                                    {mySub.marks_obtained} / {maxM}
+                                    {pct !== null ? ` (${pct}%)` : ''}
+                                  </span>
+                                ) : mySub ? (
+                                  <span className="px-2.5 py-1 rounded-lg bg-amber-100 text-amber-900 font-semibold shrink-0">
+                                    Turned In · Pending Grade
+                                  </span>
+                                ) : (
+                                  <span className="px-2.5 py-1 rounded-lg bg-rose-100 text-rose-800 font-semibold shrink-0">
+                                    Not Submitted
+                                  </span>
+                                )}
+                              </div>
+
+                              {mySub?.feedback && (
+                                <p className="p-2.5 rounded-lg bg-white border border-[#E5E2DC] text-[#353430] leading-relaxed">
+                                  <strong className="text-[#0A0A0C]">
+                                    {mySub.graded_by_name
+                                      ? `${mySub.graded_by_name}: `
+                                      : 'Feedback: '}
+                                  </strong>
+                                  {mySub.feedback}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+                )}
               </div>
               </div>
             )}
           </>
         )}
+          </div>
+        </div>
       </main>
 
-      {/* MODAL 1: ZERO-DB-STORAGE STUDENT ASSIGNMENT SUBMISSION */}
-      {submittingAssignment && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-white/15 rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <span className="font-mono-tabular text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-[#896ABD]/10 text-[#896ABD] dark:text-[#C084FC]">
-                  Zero-DB-Storage Submission
-                </span>
-                <h3 className="text-base font-semibold mt-1">{submittingAssignment.title}</h3>
-              </div>
-              <button
-                type="button"
-                aria-label="Close modal"
-                onClick={() => {
-                  setSubmittingAssignment(null);
-                  setUploadProgress(null);
-                }}
-                className="p-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/10 hover:border-[#E04F33] transition-[border-color]"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#FAF9F6] dark:bg-white/5 border border-[#E5E2DC]/70 dark:border-white/10 text-xs">
-              <button
-                type="button"
-                onClick={() => setSubmitMode('GOOGLE_DRIVE_AUTO')}
-                className={`py-2 px-3 rounded-lg font-medium flex items-center justify-center gap-1.5 ${
-                  submitMode === 'GOOGLE_DRIVE_AUTO'
-                    ? 'bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] shadow-sm'
-                    : 'text-[#5C5B57] dark:text-[#C4C3BE]'
-                }`}
-              >
-                <UploadCloud className="w-4 h-4" />
-                <span>1. Select File (Drive)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setSubmitMode('DIRECT_LINK')}
-                className={`py-2 px-3 rounded-lg font-medium flex items-center justify-center gap-1.5 ${
-                  submitMode === 'DIRECT_LINK'
-                    ? 'bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] shadow-sm'
-                    : 'text-[#5C5B57] dark:text-[#C4C3BE]'
-                }`}
-              >
-                <Link2 className="w-4 h-4" />
-                <span>2. Paste Direct Link</span>
-              </button>
-            </div>
-
-            <form onSubmit={handleExecuteSubmission} className="space-y-4 text-xs">
-              {submitMode === 'GOOGLE_DRIVE_AUTO' ? (
-                !isGoogleDriveOAuthConfigured() ? (
-                  <div className="p-5 rounded-2xl border border-amber-500/30 bg-amber-500/10 space-y-3">
-                    <div className="font-semibold text-sm text-amber-800 dark:text-amber-200">
-                      Google Drive OAuth Not Configured in This Sandbox
-                    </div>
-                    <p className="text-[#3A3936] dark:text-[#D0CEC8] leading-relaxed">
-                      One-click browser-to-Drive upload requires{' '}
-                      <code className="font-mono-tabular">NEXT_PUBLIC_GOOGLE_CLIENT_ID</code> to be configured.
-                      Without a real Google OAuth client, Learn JKLU 2.0 will never generate a placeholder Drive link. Upload your file directly to Drive, GitHub, Colab, or Overleaf and submit the verified URL below.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setSubmitMode('DIRECT_LINK')}
-                      className="px-4 py-2 rounded-xl bg-[#E04F33] text-white font-semibold"
-                    >
-                      Switch to 2. Paste Direct Link
-                    </button>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div
-                      onClick={() => fileInputRef.current?.click()}
-                      className="border-2 border-dashed border-[#896ABD]/40 hover:border-[#896ABD] rounded-2xl p-6 text-center cursor-pointer bg-[#896ABD]/5 transition-[border-color] space-y-2"
-                    >
-                      <UploadCloud className="w-8 h-8 text-[#896ABD] mx-auto" />
-                      <div className="font-semibold text-sm">
-                        {selectedFile
-                          ? `Selected: ${selectedFile.name} (${Math.max(1, Math.round(selectedFile.size / 1024))} KB)`
-                          : 'Click to select PDF, ZIP, Report, or Code file from your device'}
-                      </div>
-                      <p className="text-[11px] text-[#5C5B57] dark:text-[#94938E] max-w-md mx-auto">
-                        Uploads straight to your Google Drive, shares reader access with{' '}
-                        <strong>{workspace?.auto_share_emails?.join(', ')}</strong>, and stores only the Drive URL &amp; SHA-256 digest.
-                      </p>
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                        className="hidden"
-                      />
-                    </div>
-
-                    {uploadProgress && (
-                      <div className="p-3 rounded-xl bg-[#896ABD]/10 border border-[#896ABD]/30 space-y-1.5">
-                        <div className="flex justify-between font-medium font-mono-tabular">
-                          <span>{uploadProgress.stage}</span>
-                          <span>{uploadProgress.pct}%</span>
-                        </div>
-                        <div className="w-full h-2 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
-                          <div
-                            className="h-full bg-[#E04F33] transition-all duration-300"
-                            style={{ width: `${uploadProgress.pct}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )
-              ) : (
-                <div className="space-y-2">
-                  <label className="font-medium block">
-                    Direct Google Drive / GitHub / Colab / Overleaf / Figma URL *
-                  </label>
-                  <input
-                    type="url"
-                    required
-                    value={directLinkUrl}
-                    onChange={(e) => setDirectLinkUrl(e.target.value)}
-                    placeholder="https://drive.google.com/file/d/... or https://github.com/..."
-                    className={inputSurface}
-                  />
-                  {directLinkUrl && (
-                    <div className="text-[11px] text-emerald-600 dark:text-emerald-400">
-                      Detected Provider: <strong>{validateSubmissionLink(directLinkUrl).provider}</strong>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <label className="font-medium block mb-1">
-                  Submission Notes / Comments for Professor &amp; TA
-                </label>
-                <textarea
-                  rows={2}
-                  value={submissionNotes}
-                  onChange={(e) => setSubmissionNotes(e.target.value)}
-                  placeholder="Optional notes about your implementation or test cases..."
-                  className={inputSurface}
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setSubmittingAssignment(null)}
-                  className="px-4 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitMode === 'GOOGLE_DRIVE_AUTO' && !isGoogleDriveOAuthConfigured()}
-                  className="px-5 py-2 rounded-xl bg-[#E04F33] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold"
-                >
-                  {submitMode === 'GOOGLE_DRIVE_AUTO'
-                    ? 'Upload to My Drive & Submit Link'
-                    : 'Submit Direct Link'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 2: CREATE ASSIGNMENT OR TCS iON QUIZ */}
-      {showNewAssignmentModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-white/15 rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-base font-semibold">
-                Publish Assignment or TCS iON Quiz
-              </h3>
-              <button
-                type="button"
-                aria-label="Close modal"
-                onClick={() => setShowNewAssignmentModal(false)}
-                className="p-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/10 hover:border-[#E04F33] transition-[border-color]"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateAssignment} className="space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-medium block mb-1">Classwork Type</label>
-                  <select
-                    value={asgnForm.assignment_type}
-                    onChange={(e) => setAsgnForm({ ...asgnForm, assignment_type: e.target.value })}
-                    className={inputSurface}
-                  >
-                    <option value="ASSIGNMENT">Assignment (Drive / Link Submission)</option>
-                    <option value="LAB">Lab Sheet (Drive / Link Submission)</option>
-                    <option value="PROJECT">Course Project</option>
-                    <option value="TCS_ION_QUIZ">TCS iON Proctored Quiz Launchpad</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="font-medium block mb-1">Max Marks</label>
-                  <input
-                    type="number"
-                    value={asgnForm.max_marks}
-                    onChange={(e) => setAsgnForm({ ...asgnForm, max_marks: e.target.value })}
-                    className={inputSurface}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="font-medium block mb-1">Title *</label>
-                <input
-                  type="text"
-                  required
-                  value={asgnForm.title}
-                  onChange={(e) => setAsgnForm({ ...asgnForm, title: e.target.value })}
-                  placeholder="e.g. Lab 2: Dijkstra & Bellman-Ford Shortest Path Benchmarks"
-                  className={inputSurface}
-                />
-              </div>
-
-              <div>
-                <label className="font-medium block mb-1">Topic / Module</label>
-                <input
-                  type="text"
-                  value={asgnForm.topic_module}
-                  onChange={(e) => setAsgnForm({ ...asgnForm, topic_module: e.target.value })}
-                  className={inputSurface}
-                />
-              </div>
-
-              <div>
-                <label className="font-medium block mb-1">Instructions / Description</label>
-                <textarea
-                  rows={3}
-                  value={asgnForm.description}
-                  onChange={(e) => setAsgnForm({ ...asgnForm, description: e.target.value })}
-                  className={inputSurface}
-                />
-              </div>
-
-              {asgnForm.assignment_type === 'TCS_ION_QUIZ' ? (
-                <div className="p-3.5 rounded-xl bg-[#896ABD]/10 border border-[#896ABD]/25 space-y-2">
-                  <div className="font-semibold text-[#896ABD] dark:text-[#C084FC]">
-                    TCS iON Digital Assessment Platform Link
-                  </div>
-                  <input
-                    type="url"
-                    value={asgnForm.tcs_ion_launch_url}
-                    onChange={(e) =>
-                      setAsgnForm({ ...asgnForm, tcs_ion_launch_url: e.target.value })
-                    }
-                    placeholder="https://g01.digialm.com/..."
-                    className={inputSurface}
-                  />
-                  <input
-                    type="text"
-                    value={asgnForm.tcs_ion_exam_code}
-                    onChange={(e) =>
-                      setAsgnForm({ ...asgnForm, tcs_ion_exam_code: e.target.value })
-                    }
-                    placeholder="TCS iON Exam Code (e.g. JKLU-TCS-CS1135-Q2)"
-                    className={inputSurface}
-                  />
-                </div>
-              ) : (
-                <div>
-                  <label className="font-medium block mb-1">
-                    Problem Statement Google Drive URL (Optional)
-                  </label>
-                  <input
-                    type="url"
-                    value={asgnForm.resource_url}
-                    onChange={(e) => setAsgnForm({ ...asgnForm, resource_url: e.target.value })}
-                    placeholder="https://drive.google.com/file/d/..."
-                    className={inputSurface}
-                  />
-                </div>
-              )}
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowNewAssignmentModal(false)}
-                  className="px-4 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#E04F33] hover:opacity-90 text-white font-semibold"
-                >
-                  Publish to Classroom
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 3: GRADE SUBMISSION */}
-      {gradingSub && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-white/15 rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold">
-                  Grade Submission — {gradingSub.student_name} ({gradingSub.student_roll_no})
-                </h3>
-                {safeExternalUrl(gradingSub.submission_url) ? (
-                  <a
-                    href={safeExternalUrl(gradingSub.submission_url)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-[#896ABD] dark:text-[#C084FC] hover:underline inline-flex items-center gap-1 mt-0.5"
-                  >
-                    <span>Open Student&apos;s Google Drive File in New Tab</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                ) : (
-                  <span className="text-xs text-rose-600 dark:text-rose-400">
-                    Blocked unsafe submission URL
-                  </span>
-                )}
-              </div>
-              <button
-                type="button"
-                aria-label="Close modal"
-                onClick={() => setGradingSub(null)}
-                className="p-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/10 hover:border-[#E04F33] transition-[border-color]"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {gradingSub.submission_notes && (
-              <div className="p-3 rounded-xl bg-[#FAF9F6] dark:bg-white/5 border border-[#E5E2DC]/70 dark:border-white/10 text-xs">
-                <strong>Student Notes:</strong> {gradingSub.submission_notes}
-              </div>
-            )}
-
-            <form onSubmit={handleSaveGrade} className="space-y-3 text-xs">
-              <div>
-                <label className="font-medium block mb-1">
-                  Marks Obtained (out of {gradingSub.max_marks || 100}) *
-                </label>
-                <input
-                  type="number"
-                  step="0.5"
-                  required
-                  value={gradeMarks}
-                  onChange={(e) => setGradeMarks(e.target.value)}
-                  className={inputSurface}
-                />
-              </div>
-              <div>
-                <label className="font-medium block mb-1">Faculty / TA Evaluation Feedback</label>
-                <textarea
-                  rows={3}
-                  value={gradeFeedback}
-                  onChange={(e) => setGradeFeedback(e.target.value)}
-                  placeholder="Write feedback for the student..."
-                  className={inputSurface}
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setGradingSub(null)}
-                  className="px-4 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#E04F33] hover:opacity-90 text-white font-semibold"
-                >
-                  Save Grade &amp; Sync to TCS iON Export
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <ClassroomModals
+        workspace={workspace}
+        off={off}
+        perms={perms}
+        user={user}
+        activeId={activeId}
+        inputSurface={inputSurface}
+        offeringSectionsList={offeringSectionsList}
+        myAssignedSections={myAssignedSections}
+        isUnrestrictedStaff={isUnrestrictedStaff}
+        toggleTargetChip={toggleTargetChip}
+        loadWorkspace={loadWorkspace}
+        loadOfferingsList={loadOfferingsList}
+        handleSelectOffering={handleSelectOffering}
+        showToast={showToast}
+        submittingAssignment={submittingAssignment}
+        setSubmittingAssignment={setSubmittingAssignment}
+        submittingWork={submittingWork}
+        submitMode={submitMode}
+        setSubmitMode={setSubmitMode}
+        selectedFile={selectedFile}
+        setSelectedFile={setSelectedFile}
+        uploadProgress={uploadProgress}
+        setUploadProgress={setUploadProgress}
+        directLinkUrl={directLinkUrl}
+        setDirectLinkUrl={setDirectLinkUrl}
+        submissionNotes={submissionNotes}
+        setSubmissionNotes={setSubmissionNotes}
+        fileInputRef={fileInputRef}
+        handleExecuteSubmission={handleExecuteSubmission}
+        showNewAssignmentModal={showNewAssignmentModal}
+        setShowNewAssignmentModal={setShowNewAssignmentModal}
+        asgnAttachMode={asgnAttachMode}
+        setAsgnAttachMode={setAsgnAttachMode}
+        asgnFile={asgnFile}
+        setAsgnFile={setAsgnFile}
+        asgnUploadProgress={asgnUploadProgress}
+        setAsgnUploadProgress={setAsgnUploadProgress}
+        asgnPublishing={asgnPublishing}
+        asgnFileInputRef={asgnFileInputRef}
+        asgnForm={asgnForm}
+        setAsgnForm={setAsgnForm}
+        asgnTargetSections={asgnTargetSections}
+        setAsgnTargetSections={setAsgnTargetSections}
+        handleCreateAssignment={handleCreateAssignment}
+        gradingSub={gradingSub}
+        setGradingSub={setGradingSub}
+        gradeMarks={gradeMarks}
+        setGradeMarks={setGradeMarks}
+        gradeFeedback={gradeFeedback}
+        setGradeFeedback={setGradeFeedback}
+        savingGrade={savingGrade}
+        handleSaveGrade={handleSaveGrade}
+        bannerModalOffering={bannerModalOffering}
+        setBannerModalOffering={setBannerModalOffering}
+        bannerDraftUrl={bannerDraftUrl}
+        setBannerDraftUrl={setBannerDraftUrl}
+        bannerUploadKb={bannerUploadKb}
+        setBannerUploadKb={setBannerUploadKb}
+        bannerCropFile={bannerCropFile}
+        setBannerCropFile={setBannerCropFile}
+        savingBanner={savingBanner}
+        handleBannerFilePick={handleBannerFilePick}
+        handleSaveCourseBanner={handleSaveCourseBanner}
+        editingAnn={editingAnn}
+        setEditingAnn={setEditingAnn}
+        editAnnTitle={editAnnTitle}
+        setEditAnnTitle={setEditAnnTitle}
+        editAnnContent={editAnnContent}
+        setEditAnnContent={setEditAnnContent}
+        savingAnnEdit={savingAnnEdit}
+        handleSaveAnnouncementEdit={handleSaveAnnouncementEdit}
+        editingAsgn={editingAsgn}
+        setEditingAsgn={setEditingAsgn}
+        editAsgnForm={editAsgnForm}
+        setEditAsgnForm={setEditAsgnForm}
+        savingAsgnEdit={savingAsgnEdit}
+        handleSaveAssignmentEdit={handleSaveAssignmentEdit}
+        groupModalAsgn={groupModalAsgn}
+        setGroupModalAsgn={setGroupModalAsgn}
+        drawerTarget={drawerTarget}
+        setDrawerTarget={setDrawerTarget}
+        showReleaseModal={showReleaseModal}
+        setShowReleaseModal={setShowReleaseModal}
+      />
 
       <Footer />
     </div>

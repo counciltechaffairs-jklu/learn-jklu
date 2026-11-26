@@ -1,14 +1,15 @@
-import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { AnimatePresence } from 'framer-motion';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
+import { MotionConfig } from 'framer-motion';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Analytics } from '@vercel/analytics/react';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
-import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
+import { ThemeProvider } from '@/contexts/ThemeContext';
 import Loader from '@/components/ui/Loader';
 import AdminRoute from '@/components/guards/AdminRoute';
 import { API } from '@/utils/api';
-import { getPostLoginDestination } from '@/utils/postLoginRedirect';
+import { getPostLoginDestination, setStoredAdminSecretSlug } from '@/utils/postLoginRedirect';
+import PageBackdrop from '@/components/layout/PageBackdrop';
 
 // Lazy load heavy route views & WebGPU background shell
 const AeroShards = lazy(() => import('@/components/layout/AeroShards'));
@@ -35,11 +36,100 @@ const LoadingFallback = () => {
 
 // Manual code override: set to true only if you want to lock the entire frontend manually in code
 const MANUAL_MAINTENANCE_MODE = false;
-const MAINTENANCE_ADMIN_ACCESS_ID = 'cota-jklu';
+
+/**
+ * SecretAdminGate
+ * Verifies the URL slug (or ?id= param) against the backend's ADMIN_SECRET_PATH env var
+ * via POST /admin-access/verify (never hardcoded in the frontend bundle).
+ * Works identically in both normal mode and maintenance mode; invalid slugs silently fall back.
+ */
+const SecretAdminGate: React.FC<{
+  maintenanceMode: boolean;
+  maintenanceMessage: string;
+  queryId?: string | null;
+}> = ({ maintenanceMode, maintenanceMessage, queryId }) => {
+  const { secretSlug } = useParams<{ secretSlug?: string }>();
+  const { user } = useAuth();
+  const candidate = String(queryId || secretSlug || '').trim();
+  const [status, setStatus] = useState<'checking' | 'valid' | 'invalid'>(() => {
+    if (!candidate || typeof window === 'undefined') return candidate ? 'checking' : 'invalid';
+    try {
+      const cached =
+        sessionStorage.getItem('admin_secret_slug') ||
+        localStorage.getItem('admin_secret_slug');
+      if (cached && cached === candidate) {
+        sessionStorage.setItem('admin_secret_slug', candidate);
+        return 'valid';
+      }
+    } catch {}
+    return 'checking';
+  });
+
+  useEffect(() => {
+    if (!candidate) {
+      setStatus('invalid');
+      return;
+    }
+    if (typeof window === 'undefined') return;
+    try {
+      const cached =
+        sessionStorage.getItem('admin_secret_slug') ||
+        localStorage.getItem('admin_secret_slug');
+      if (cached && cached === candidate) {
+        sessionStorage.setItem('admin_secret_slug', candidate);
+        setStatus('valid');
+        return;
+      }
+    } catch {}
+
+    let active = true;
+    setStatus('checking');
+    API.client
+      .post('/admin-access/verify', { slug: candidate })
+      .then((res) => {
+        if (!active) return;
+        if (res.data?.valid) {
+          setStoredAdminSecretSlug(candidate);
+          setStatus('valid');
+        } else {
+          setStatus('invalid');
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        setStatus('invalid');
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [candidate]);
+
+  if (status === 'checking') {
+    return <LoadingFallback />;
+  }
+
+  if (status === 'invalid') {
+    return maintenanceMode ? (
+      <MaintenanceMode message={maintenanceMessage} />
+    ) : (
+      <Navigate to="/home" replace />
+    );
+  }
+
+  if (user?.is_admin || user?.is_sub_admin) {
+    return (
+      <AdminRoute>
+        <AdminDashboard />
+      </AdminRoute>
+    );
+  }
+
+  return <AdminLogin secretSlug={candidate} />;
+};
 
 function AppContent() {
   const { user, loading } = useAuth();
-  const { theme } = useTheme();
   const location = useLocation();
   const [maintenanceState, setMaintenanceState] = useState<{
     checked: boolean;
@@ -97,54 +187,57 @@ function AppContent() {
   const isMaintenanceActive = MANUAL_MAINTENANCE_MODE || maintenanceState.enabled;
 
   if (isMaintenanceActive) {
-    const accessId = new URLSearchParams(location.search).get('id');
-    const hasAdminAccessId = accessId === MAINTENANCE_ADMIN_ACCESS_ID;
+    const queryId = new URLSearchParams(location.search).get('id');
 
     return (
-      <div className="min-h-screen bg-[#FAF9F6] dark:bg-[#0A0A0C] text-[#0A0A0C] dark:text-[#F5F4F0] transition-colors duration-300">
+      <div className="min-h-screen bg-[#FAF9F6] text-[#0A0A0C]">
         <Suspense fallback={<LoadingFallback />}>
           <Routes>
-            {/* Admin login during maintenance requires the special ?id=cota-jklu parameter */}
+            {/* Maintenance Mode: plain /admin and /admin-login are blocked; only /<ADMIN_SECRET_PATH> (or ?id=<secret>) unlocks admin */}
             <Route
               path="/admin-login"
               element={
-                user?.is_admin ? (
-                  <Navigate to="/admin" replace />
-                ) : hasAdminAccessId ? (
-                  <AdminLogin />
+                queryId ? (
+                  <SecretAdminGate
+                    maintenanceMode={true}
+                    maintenanceMessage={maintenanceState.message}
+                    queryId={queryId}
+                  />
                 ) : (
                   <MaintenanceMode message={maintenanceState.message} />
                 )
               }
             />
-            {/* Full admin remains reachable so admin can toggle maintenance off */}
             <Route
               path="/admin"
-              element={
-                user?.is_admin ? (
-                  <AdminRoute>
-                    <AdminDashboard />
-                  </AdminRoute>
-                ) : (
-                  <MaintenanceMode message={maintenanceState.message} />
-                )
-              }
+              element={<MaintenanceMode message={maintenanceState.message} />}
             />
             <Route
               path="/admin/*"
-              element={
-                user?.is_admin ? (
-                  <AdminRoute>
-                    <AdminDashboard />
-                  </AdminRoute>
-                ) : (
-                  <MaintenanceMode message={maintenanceState.message} />
-                )
-              }
+              element={<MaintenanceMode message={maintenanceState.message} />}
             />
             <Route
               path="/maintenance"
               element={<MaintenanceMode message={maintenanceState.message} />}
+            />
+            {/* Secret backend-env admin entry path: /<ADMIN_SECRET_PATH> */}
+            <Route
+              path="/:secretSlug"
+              element={
+                <SecretAdminGate
+                  maintenanceMode={true}
+                  maintenanceMessage={maintenanceState.message}
+                />
+              }
+            />
+            <Route
+              path="/:secretSlug/*"
+              element={
+                <SecretAdminGate
+                  maintenanceMode={true}
+                  maintenanceMessage={maintenanceState.message}
+                />
+              }
             />
             {/* Lock every other page to MaintenanceMode while active */}
             <Route
@@ -157,29 +250,35 @@ function AppContent() {
     );
   }
 
+  const isHomeRoute = location.pathname === '/' || location.pathname === '/home';
+
   return (
-    <div className="relative min-h-screen bg-[#FAF9F6] dark:bg-[#0A0A0C] text-[#0A0A0C] dark:text-[#F5F4F0] transition-colors duration-300">
-      {/* Persistent, lazy-loaded WebGPU/Canvas2D background shell across routes */}
-      <div className="fixed inset-0 z-0 opacity-60 dark:opacity-75 pointer-events-none">
-        <Suspense fallback={null}>
-          <AeroShards
-            shardColor="#896ABD"
-            accentColor="#E04F33"
-            placement="full"
-            material="glass"
-            markers="plus"
-            count={650}
-            depthOfField={0.65}
-            vignette={0.25}
-            lightMode={theme === 'light'}
-            speed={0.85}
-            glow={0.35}
-            grain={0.04}
-          />
-        </Suspense>
-      </div>
+    <div className="relative min-h-screen bg-[#F8F7F4] text-[#0A0A0C]">
+      {/* Full-page Light-mode AeroShards with obsidian/charcoal shard tint exclusively on Home; calm illustrated PageBackdrop on inner pages */}
+      {isHomeRoute ? (
+        <div className="fixed inset-0 z-0 opacity-75 pointer-events-none">
+          <Suspense fallback={null}>
+            <AeroShards
+              shardColor="#1C1C26"
+              accentColor="#E04F33"
+              backgroundColor="#F5F3EE"
+              placement="full"
+              material="glass"
+              markers="plus"
+              count={650}
+              depthOfField={0.65}
+              vignette={0.28}
+              lightMode={true}
+              speed={0.85}
+              glow={0.35}
+              grain={0.04}
+            />
+          </Suspense>
+        </div>
+      ) : (
+        <PageBackdrop pathname={location.pathname} isDark={false} />
+      )}
       <div className="relative z-10">
-      <AnimatePresence mode="wait">
         <Suspense fallback={<LoadingFallback />}>
           <Routes>
             {/* Landing page is unified at /home */}
@@ -240,26 +339,24 @@ function AppContent() {
                 )
               }
             />
-            <Route
-              path="/admin-login"
-              element={
-                user ? (
-                  <Navigate to={user.is_admin ? "/admin" : user.admin_role === 'professor' ? "/faculty" : user.admin_role === 'ta' ? "/classroom" : user.admin_role === 'coding_ta' ? "/admin/coding-hour" : user.is_sub_admin ? "/admin/contests" : "/home"} replace />
-                ) : (
-                  <AdminLogin />
-                )
-              }
-            />
+            {/* Plain /admin and /admin-login never open directly — require backend ADMIN_SECRET_PATH */}
+            <Route path="/admin-login" element={<Navigate to="/home" replace />} />
+            <Route path="/admin" element={<Navigate to="/home" replace />} />
+            <Route path="/admin/*" element={<Navigate to="/home" replace />} />
             <Route
               path="/forgot-password"
               element={<Navigate to="/login" replace />}
             />
-            {/* Protected routes - redirect to home if not logged in (login blocked for testing) */}
+            {/* Protected routes - redirect to home if not logged in */}
             <Route
               path="/dashboard"
               element={
                 user && !user.is_admin && !user.is_sub_admin ? (
-                  <StudentDashboard />
+                  user.admin_role === 'professor' || user.is_professor ? (
+                    <Navigate to="/classroom" replace />
+                  ) : (
+                    <StudentDashboard />
+                  )
                 ) : (
                   <Navigate to="/home" replace />
                 )
@@ -275,40 +372,34 @@ function AppContent() {
                 )
               }
             />
-            {/* Admin route - protected with AdminRoute component */}
-            <Route
-              path="/admin"
-              element={
-                <AdminRoute>
-                  <AdminDashboard />
-                </AdminRoute>
-              }
-            />
-            {/* Also protect any /admin/* sub-routes */}
-            <Route
-              path="/admin/*"
-              element={
-                <AdminRoute>
-                  <AdminDashboard />
-                </AdminRoute>
-              }
-            />
             {/* Maintenance page cannot be visited when maintenance mode is OFF */}
             <Route path="/maintenance" element={<Navigate to="/" replace />} />
+            {/* Secret backend-env admin entry path: /<ADMIN_SECRET_PATH> */}
+            <Route
+              path="/:secretSlug"
+              element={
+                <SecretAdminGate
+                  maintenanceMode={false}
+                  maintenanceMessage=""
+                />
+              }
+            />
+            <Route
+              path="/:secretSlug/*"
+              element={
+                <SecretAdminGate
+                  maintenanceMode={false}
+                  maintenanceMessage=""
+                />
+              }
+            />
             {/* Catch all - redirect to landing page */}
             <Route
               path="*"
-              element={
-                user ? (
-                  <Navigate to={user.is_admin ? "/admin" : "/home"} replace />
-                ) : (
-                  <Navigate to="/" replace />
-                )
-              }
+              element={<Navigate to="/home" replace />}
             />
           </Routes>
         </Suspense>
-      </AnimatePresence>
       </div>
     </div>
   );
@@ -317,19 +408,21 @@ function AppContent() {
 function App() {
   return (
     <ThemeProvider>
-      <AuthProvider>
-        <ErrorBoundary>
-          <Router
-            future={{
-              v7_startTransition: true,
-              v7_relativeSplatPath: true,
-            }}
-          >
-            <AppContent />
-          </Router>
-        </ErrorBoundary>
-      </AuthProvider>
-      <Analytics />
+      <MotionConfig reducedMotion="user">
+        <AuthProvider>
+          <ErrorBoundary>
+            <Router
+              future={{
+                v7_startTransition: true,
+                v7_relativeSplatPath: true,
+              }}
+            >
+              <AppContent />
+            </Router>
+          </ErrorBoundary>
+        </AuthProvider>
+        <Analytics />
+      </MotionConfig>
     </ThemeProvider>
   );
 }

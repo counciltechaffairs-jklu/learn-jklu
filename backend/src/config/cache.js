@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { LRUCache } from 'lru-cache';
 import Redis from 'ioredis';
 
@@ -21,7 +22,7 @@ let cacheMisses = 0;
 let stampedesPrevented = 0;
 
 const REDIS_URL = String(process.env.REDIS_URL || '').trim();
-const MAX_REDIS_VALUE_BYTES = 120 * 1024; // 120KB max per key
+const MAX_REDIS_VALUE_BYTES = 512 * 1024; // 512KB max per key
 const CACHE_KEY_PREFIX = 'jklu:cache:';
 
 if (REDIS_URL) {
@@ -190,8 +191,14 @@ export async function checkRateLimitWindow(key, maxCount, windowSec) {
   const fullKey = `jklu:rl:${key}`;
   if (redisClient && redisConnected) {
     try {
-      const count = await redisClient.incr(fullKey);
-      if (count === 1) {
+      const results = await redisClient
+        .multi()
+        .incr(fullKey)
+        .ttl(fullKey)
+        .exec();
+      const count = Number(results?.[0]?.[1] ?? 1);
+      const ttl = Number(results?.[1]?.[1] ?? -1);
+      if (count === 1 || ttl < 0) {
         await redisClient.expire(fullKey, windowSec);
       }
       return count <= maxCount;

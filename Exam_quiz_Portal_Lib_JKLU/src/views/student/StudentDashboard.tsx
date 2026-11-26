@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Upload, FileText, Filter, Download, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Upload, FileText, Filter, Download, CheckCircle2, AlertCircle, Calendar, BookOpen } from 'lucide-react';
+import { buildGoogleCalendarUrl } from '@/utils/calendarLinks';
 import { useNavigate } from 'react-router-dom';
 import { API } from '@/utils/api';
+import { classroomApi } from '@/utils/classroomApi';
 import { useAuth } from '@/contexts/AuthContext';
 import { sanitizeErrorMessage } from '@/utils/errorSanitizer';
 import Toast from '@/components/ui/Toast';
 import Loader from '@/components/ui/Loader';
 import GlobalNavbar from '@/components/layout/GlobalNavbar';
 
-const MAX_UPLOAD_BYTES = 500 * 1024; // 500 KB
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
 
 interface Course {
   id: number;
@@ -47,10 +49,13 @@ const StudentDashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [showVerifyPopup, setShowVerifyPopup] = useState(false);
+  const [classroomOverview, setClassroomOverview] = useState<any | null>(null);
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' as 'success' | 'error' | 'info' });
 
   // Upload form state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [hasUploadedToday, setHasUploadedToday] = useState(false);
   const [uploadForm, setUploadForm] = useState({
     course_id: '',
     courseText: '',
@@ -83,6 +88,10 @@ const StudentDashboard: React.FC = () => {
     } catch {
       // ignore silent course load error
     }
+    classroomApi
+      .getStudentOverview()
+      .then((data) => setClassroomOverview(data))
+      .catch(() => {});
   }, []);
 
   const fetchPapers = useCallback(async () => {
@@ -108,9 +117,27 @@ const StudentDashboard: React.FC = () => {
     }
   }, [filters, user]);
 
+  const checkDailyUploadLimit = useCallback(async () => {
+    if (!user || !user.id) {
+      setHasUploadedToday(false);
+      return;
+    }
+    try {
+      const response = await API.getPapers({ my_papers_only: true });
+      const allMine = Array.isArray(response.data) ? response.data : [];
+      setHasUploadedToday(
+        allMine.some((p: Paper) => Date.now() - new Date(p.uploaded_at).getTime() < 24 * 60 * 60 * 1000)
+      );
+    } catch {}
+  }, [user]);
+
   useEffect(() => {
     fetchCourses();
   }, [fetchCourses]);
+
+  useEffect(() => {
+    checkDailyUploadLimit();
+  }, [checkDailyUploadLimit]);
 
   useEffect(() => {
     fetchPapers();
@@ -119,7 +146,7 @@ const StudentDashboard: React.FC = () => {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
     if (file && file.size > MAX_UPLOAD_BYTES) {
-      showToast('File size must be 500 KB or less.', 'error');
+      showToast('File size must be 10 MB or less.', 'error');
       e.target.value = '';
       setSelectedFile(null);
       return;
@@ -129,7 +156,7 @@ const StudentDashboard: React.FC = () => {
 
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!(user as any)?.id_verified && localStorage.getItem('idVerified') !== 'yes') {
+    if (!(user as any)?.id_verified && (typeof window === 'undefined' || localStorage.getItem('idVerified') !== 'yes')) {
       setShowVerifyPopup(true);
       return;
     }
@@ -142,7 +169,7 @@ const StudentDashboard: React.FC = () => {
       return;
     }
     if (selectedFile.size > MAX_UPLOAD_BYTES) {
-      showToast('File size must be 500 KB or less.', 'error');
+      showToast('File size must be 10 MB or less.', 'error');
       return;
     }
     if (!uploadForm.course_id && (!uploadForm.courseText || !uploadForm.courseName)) {
@@ -188,6 +215,7 @@ const StudentDashboard: React.FC = () => {
       await API.uploadPaper(formData);
       showToast('Paper uploaded successfully!', 'success');
       setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       setUploadForm({
         course_id: '',
         courseText: '',
@@ -201,6 +229,7 @@ const StudentDashboard: React.FC = () => {
         semester: '1'
       });
       fetchPapers();
+      checkDailyUploadLimit();
     } catch (error: any) {
       showToast(sanitizeErrorMessage(error?.message, 'Error'), 'error');
     } finally {
@@ -246,9 +275,9 @@ const StudentDashboard: React.FC = () => {
   const inputClass =
     'w-full px-3.5 py-2.5 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-xl text-sm text-[#0A0A0C] dark:text-[#F5F4F0] placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60 focus:outline-none focus:border-[#896ABD] dark:focus:border-[#A855F7] transition-colors';
 
-  const isVerified = Boolean((user as any)?.id_verified || localStorage.getItem('idVerified') === 'yes');
-  const hasUploadedToday = papers.some(
-    (p) => Date.now() - new Date(p.uploaded_at).getTime() < 24 * 60 * 60 * 1000
+  const isVerified = Boolean(
+    (user as any)?.id_verified ||
+      (typeof window !== 'undefined' && localStorage.getItem('idVerified') === 'yes')
   );
 
   return (
@@ -290,6 +319,75 @@ const StudentDashboard: React.FC = () => {
             </button>
           )}
         </div>
+
+        {/* Cross-Course Academic Classroom Hub Strip */}
+        {classroomOverview && (
+          <div className="rounded-2xl p-4 sm:p-5 bg-white/95 border border-[#E5E2DC] shadow-sm space-y-3 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-semibold text-sm text-[#0A0A0C]">
+                <BookOpen className="w-4 h-4 text-[#E04F33]" />
+                <span>My Academic Hub ({classroomOverview.courses?.length || 0} Classrooms)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {classroomOverview.google_subscribe_url && (
+                  <a
+                    href={classroomOverview.google_subscribe_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-xl bg-[#0A0A0C] hover:bg-[#E04F33] text-white font-semibold inline-flex items-center gap-1.5"
+                  >
+                    <Calendar className="w-3.5 h-3.5" />
+                    <span>Sync Deadlines to Google Calendar</span>
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() => navigate('/classroom')}
+                  className="px-3 py-1.5 rounded-xl border border-[#DDD8CE] hover:border-[#896ABD] font-semibold"
+                >
+                  Open Classrooms
+                </button>
+              </div>
+            </div>
+            {(classroomOverview.upcoming_deadlines || []).length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                {classroomOverview.upcoming_deadlines.slice(0, 3).map((d: any) => (
+                  <div
+                    key={d.id}
+                    className="p-3 rounded-xl bg-[#FAF9F6] border border-[#E5E2DC] flex items-center justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-mono-tabular text-[10px] font-semibold text-[#896ABD]">
+                        {d.course_code} · {d.assignment_type}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/classroom?offeringId=${d.offering_id}`)}
+                        className="font-semibold text-[#0A0A0C] hover:text-[#E04F33] truncate block text-left"
+                      >
+                        {d.title}
+                      </button>
+                    </div>
+                    {d.due_at && (
+                      <a
+                        href={buildGoogleCalendarUrl({
+                          title: `[${d.course_code}] ${d.title}`,
+                          details: d.course_name,
+                          startIso: d.due_at,
+                        })}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2 py-1 rounded-lg bg-white border border-[#DDD8CE] text-[10px] font-semibold text-[#5B3B96] shrink-0"
+                      >
+                        + Cal
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6">
           {/* Upload Paper Form */}
@@ -483,9 +581,10 @@ const StudentDashboard: React.FC = () => {
 
               <div className="space-y-1.5">
                 <label className="block text-xs font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">
-                  File (Max 500 KB)
+                  File (Max 10 MB PDF)
                 </label>
                 <input
+                  ref={fileInputRef}
                   type="file"
                   onChange={handleFileSelect}
                   className="w-full px-3 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-xl text-xs sm:text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-[#896ABD]/15 file:text-[#896ABD] dark:file:text-[#C084FC] cursor-pointer"
@@ -688,14 +787,15 @@ const StudentDashboard: React.FC = () => {
 
       {showVerifyPopup && (
         <div
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          className="modal-backdrop-enter fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={() => setShowVerifyPopup(false)}
         >
           <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
+            initial={{ opacity: 0, y: 10, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
             onClick={(e) => e.stopPropagation()}
-            className="max-w-md w-full rounded-2xl p-6 bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] shadow-2xl space-y-4"
+            className="max-w-md w-full rounded-2xl p-6 bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] shadow-[var(--shadow-elevated)] space-y-4"
           >
             <div className="flex items-start gap-3">
               <div className="p-2.5 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 shrink-0">

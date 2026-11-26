@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { getDb, withTransaction } from '../config/db.js';
 import { invalidateCachePrefix, checkRateLimitWindow } from '../config/cache.js';
-import { JWT_SECRET } from '../config/env.js';
+import { JWT_SECRET, parsePositiveInt } from '../config/env.js';
 import { verifyPasswordNonBlocking, hashPasswordNonBlocking } from '../config/cryptoPool.js';
 import {
   signUserToken,
@@ -20,7 +20,7 @@ import {
   uploadLimiter,
   profileWriteLimiter,
 } from '../middleware/rateLimiters.js';
-import { userUpload } from '../middleware/uploads.js';
+import { userUpload, validateUploadedFileMagic } from '../middleware/uploads.js';
 import { createAsyncRouter } from '../utils/routerHelper.js';
 import { writeAuditLog } from '../utils/security.js';
 
@@ -316,6 +316,23 @@ router.post('/register', authLimiter, async (req, res) => {
         [created.id, created.name, email]
       );
 
+      // Auto-enroll newly registered student into released core offerings matching programme + semester
+      if (department) {
+        await tx.query(
+          `INSERT INTO course_enrollments (
+             offering_id, student_id, roll_no, student_name, student_email, section, enroll_source, attendance_pct
+           )
+           SELECT co.id, $1, $2, $3, $4, 'Sec A', 'AUTO_BATCH', NULL
+           FROM course_offerings co
+           WHERE co.is_released = TRUE
+             AND co.auto_enroll = TRUE
+             AND UPPER(co.programme) = UPPER($5)
+             AND (co.semester = 'ALL' OR ($6::text IS NOT NULL AND co.semester = $6::text))
+           ON CONFLICT (offering_id, student_email) DO NOTHING`,
+          [created.id, rollNo, created.name, email, department, year]
+        );
+      }
+
       return created;
     });
 
@@ -509,21 +526,31 @@ router.get('/me/activity', requireAuth, async (req, res) => {
 
 router.put('/profile', requireAuth, profileWriteLimiter, async (req, res) => {
   const user = req.user;
-  const { roll_no, student_id, name, department, year } = req.body;
+  const { roll_no, student_id, name, department, year, semester } = req.body;
   const db = await getDb();
+
+  let semYearStr = year !== undefined ? String(year).trim() : user.year;
+  if (semester !== undefined && semester !== null && String(semester).trim() !== '') {
+    const semNum = parsePositiveInt(semester);
+    if (!semNum || semNum < 1 || semNum > 10) {
+      res.status(400).json({ detail: 'Semester must be a number between 1 and 10' });
+      return;
+    }
+    semYearStr = `Semester ${semNum}`;
+  }
 
   const isStaff = Boolean(user.is_admin || user.admin_role);
   const nextRoll = roll_no !== undefined ? String(roll_no).trim() : user.roll_no;
   const nextStudentId = student_id !== undefined ? String(student_id).trim() : user.student_id;
   const nextDept = department !== undefined ? String(department).trim() : user.department;
-  const nextYear = year !== undefined ? String(year).trim() : user.year;
+  const nextYear = semYearStr;
 
   const identityChanged =
     !isStaff &&
     ((roll_no !== undefined && nextRoll !== (user.roll_no ?? '')) ||
       (student_id !== undefined && nextStudentId !== (user.student_id ?? '')) ||
       (department !== undefined && nextDept !== (user.department ?? '')) ||
-      (year !== undefined && nextYear !== (user.year ?? '')));
+      ((year !== undefined || semester !== undefined) && nextYear !== (user.year ?? '')));
 
   const updated = await db.query(
     `UPDATE users
@@ -541,16 +568,58 @@ router.put('/profile', requireAuth, profileWriteLimiter, async (req, res) => {
     [
       roll_no !== undefined ? nextRoll : null,
       student_id !== undefined ? nextStudentId : null,
-      name !== undefined ? String(name).trim() : null,
+      name !== undefined ? String(name).trim() || user.name : null,
       department !== undefined ? nextDept : null,
-      year !== undefined ? nextYear : null,
+      year !== undefined || semester !== undefined ? nextYear : null,
       identityChanged,
       user.id,
     ]
   );
   invalidateCachePrefix('auth:');
   invalidateCachePrefix('admin:');
-  res.json(formatUserResponse(updated.rows[0]));
+  const taOfferingIds = await getTaOfferingIds(db, updated.rows[0]);
+  res.json(formatUserResponse(updated.rows[0], taOfferingIds));
+});
+
+router.post('/change-password', requireAuth, profileWriteLimiter, async (req, res) => {
+  const currentPassword = String(req.body?.current_password || '');
+  const newPassword = String(req.body?.new_password || '');
+  if (!currentPassword || newPassword.length < 8) {
+    res.status(400).json({ detail: 'Current password and new password (min 8 chars) are required' });
+    return;
+  }
+  const db = await getDb();
+  const uRes = await db.query(
+    `SELECT ${USER_AUTH_COLS} FROM users WHERE id = $1 LIMIT 1`,
+    [req.user.id]
+  );
+  const u = uRes.rowCount > 0 ? uRes.rows[0] : null;
+  if (!u || !(await verifyPasswordNonBlocking(currentPassword, u.password_hash))) {
+    res.status(400).json({ detail: 'Current password is incorrect' });
+    return;
+  }
+  const nextHash = await hashPasswordNonBlocking(newPassword, 10);
+  const updated = await db.query(
+    'UPDATE users SET password_hash = $1, token_version = token_version + 1, updated_at = NOW() WHERE id = $2 RETURNING token_version',
+    [nextHash, req.user.id]
+  );
+  await writeAuditLog(db, {
+    actorId: req.user.id,
+    action: 'CHANGE_PASSWORD',
+    entityType: 'USER',
+    entityId: req.user.id,
+  });
+  invalidateCachePrefix('auth:');
+  const freshToken = signUserToken({
+    ...u,
+    token_version: Number(updated.rows[0]?.token_version ?? Number(u.token_version || 0) + 1),
+  });
+  res.json({ message: 'Password changed successfully', access_token: freshToken });
+});
+
+router.post('/logout', async (_req, res) => {
+  res.clearCookie('auth_token', { path: '/' });
+  res.json({ message: 'Signed out successfully' });
 });
 
 router.post('/profile/id-card', requireAuth, uploadLimiter, userUpload.single('file'), async (req, res) => {
@@ -558,6 +627,11 @@ router.post('/profile/id-card', requireAuth, uploadLimiter, userUpload.single('f
   const file = req.file;
   if (!file) {
     res.status(400).json({ detail: 'ID card file is required' });
+    return;
+  }
+  if (!(await validateUploadedFileMagic(file.path, ['png', 'jpeg', 'webp', 'pdf']))) {
+    fs.unlink(file.path, () => {});
+    res.status(400).json({ detail: 'Uploaded file header does not match a valid image or PDF document' });
     return;
   }
   const db = await getDb();
@@ -572,7 +646,8 @@ router.post('/profile/id-card', requireAuth, uploadLimiter, userUpload.single('f
   );
   invalidateCachePrefix('admin:');
   invalidateCachePrefix('auth:');
-  res.json(formatUserResponse(updated.rows[0]));
+  const taOfferingIds = await getTaOfferingIds(db, updated.rows[0]);
+  res.json(formatUserResponse(updated.rows[0], taOfferingIds));
 });
 
 export default router;

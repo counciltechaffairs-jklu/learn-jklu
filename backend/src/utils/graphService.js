@@ -285,7 +285,7 @@ export async function getGraphStats() {
   const records = await runCypher(
     'MATCH (n) WITH count(n) AS nodes OPTIONAL MATCH ()-[r]->() RETURN nodes, count(r) AS rels',
     {},
-    2500
+    5000
   );
   if (!records || records.length === 0) {
     return { ...health, nodes: 0, relationships: 0 };

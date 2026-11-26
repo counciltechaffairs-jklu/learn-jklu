@@ -45,8 +45,10 @@ const ArchiveHeatmap: React.FC<ArchiveHeatmapProps> = ({
   const height = Math.max(200, Math.min(340, data.length * 42 + 64));
 
   return (
-    <div style={{ height }} className="w-full" role="region" aria-label={ariaLabel}>
-      <ResponsiveHeatMap
+    <div className="w-full" role="region" aria-label={ariaLabel}>
+      <div className="w-full overflow-x-auto pb-1">
+        <div style={{ height }} className="min-w-[680px]">
+          <ResponsiveHeatMap
         data={data}
         margin={{ top: 34, right: 16, bottom: 20, left: 72 }}
         valueFormat={(v) => `${Number(v || 0)}`}
@@ -98,8 +100,13 @@ const ArchiveHeatmap: React.FC<ArchiveHeatmapProps> = ({
             </div>
           );
         }}
-        ariaLabel={ariaLabel}
-      />
+            ariaLabel={ariaLabel}
+          />
+        </div>
+      </div>
+      <p className="sm:hidden text-[10px] font-mono-tabular text-[#5C5B57] dark:text-[#94938E] mt-1 text-right">
+        Swipe horizontally to inspect all years →
+      </p>
     </div>
   );
 };

@@ -35,10 +35,33 @@ export function sanitizeNextPath(rawNext?: string | null): string | null {
   return trimmed;
 }
 
+export function getAdminSecretPath(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const slug =
+      localStorage.getItem('admin_secret_slug') ||
+      sessionStorage.getItem('admin_secret_slug') ||
+      '';
+    return slug ? `/${slug.replace(/^\/+|\/+$/g, '')}` : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredAdminSecretSlug(slug?: string | null) {
+  if (typeof window === 'undefined' || !slug) return;
+  const clean = String(slug).trim().replace(/^\/+|\/+$/g, '');
+  if (!clean) return;
+  try {
+    sessionStorage.setItem('admin_secret_slug', clean);
+    localStorage.setItem('admin_secret_slug', clean);
+  } catch {}
+}
+
 /**
  * Resolves the post-login/post-register landing route:
- * honors safe `?next=` first, otherwise routes admins cleanly and sends
- * students, dual-hat Student · TAs, and professors directly to `/classroom`.
+ * honors safe `?next=` first, otherwise routes admins via the secret backend slug
+ * (never blocked `/admin`), and sends students/TAs/professors to `/classroom`.
  */
 export function getPostLoginDestination(
   user?: PostLoginUser | null,
@@ -47,9 +70,16 @@ export function getPostLoginDestination(
   const safeNext = sanitizeNextPath(rawNext);
   if (safeNext) return safeNext;
 
-  if (user?.is_admin || user?.admin_role === 'full_admin') return '/admin';
-  if (user?.admin_role === 'coding_ta') return '/admin/coding-hour';
-  if (user?.is_sub_admin) return '/admin/contests';
+  if (
+    user?.is_admin ||
+    user?.is_sub_admin ||
+    user?.admin_role === 'full_admin' ||
+    user?.admin_role === 'coding_ta' ||
+    user?.admin_role === 'paper_admin' ||
+    user?.admin_role === 'sub_admin'
+  ) {
+    return getAdminSecretPath() || '/home';
+  }
   return '/classroom';
 }
 

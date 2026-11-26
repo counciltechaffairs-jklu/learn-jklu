@@ -248,8 +248,8 @@ router.post('/verify-user/:user_id', requireVerificationAdmin, async (req, res) 
 
 router.get('/users', requireFullAdmin, async (req, res) => {
   const db = await getDb();
-  const page = Math.max(1, Number(req.query.page || 1));
-  const limit = Math.min(500, Math.max(1, Number(req.query.limit || 200)));
+  const page = parsePositiveInt(req.query.page) || 1;
+  const limit = Math.min(500, parsePositiveInt(req.query.limit) || 200);
   const offset = (page - 1) * limit;
   const q = String(req.query.q || '').trim();
 
@@ -332,38 +332,65 @@ router.put('/users/:user_id', requireFullAdmin, async (req, res) => {
   }
 
   const { name, email, is_admin, id_verified, is_active } = req.body;
+  const db = await getDb();
+  const existingRes = await db.query(
+    'SELECT id, is_admin, admin_role, is_active FROM users WHERE id = $1 LIMIT 1',
+    [userId]
+  );
+  if (existingRes.rowCount === 0) {
+    res.status(404).json({ detail: 'User not found' });
+    return;
+  }
+  const existing = existingRes.rows[0];
+
+  let nextIsAdmin = is_admin !== undefined ? Boolean(is_admin) : Boolean(existing.is_admin);
+  let nextRole = hasAdminRoleKey ? normalizedRole : existing.admin_role;
+
+  if (hasAdminRoleKey && (normalizedRole === null || normalizedRole === 'professor') && is_admin === undefined) {
+    nextIsAdmin = false;
+  }
+  if (is_admin === false && !hasAdminRoleKey && nextRole !== 'professor') {
+    nextRole = null;
+  }
+  if (hasAdminRoleKey && normalizedRole === 'full_admin') {
+    nextIsAdmin = true;
+  }
+  if (is_admin === true && !hasAdminRoleKey && (!nextRole || nextRole === 'professor')) {
+    nextRole = 'full_admin';
+  }
+
+  const nextIsActive = is_active !== undefined ? Boolean(is_active) : existing.is_active !== false;
+  if (userId === Number(req.user.id) && (!nextIsActive || (!nextIsAdmin && nextRole !== 'full_admin'))) {
+    res.status(400).json({ detail: 'You cannot demote or deactivate your own admin account' });
+    return;
+  }
+
   const shouldRevokeSessions =
     is_admin !== undefined || hasAdminRoleKey || is_active === false;
 
-  const db = await getDb();
   const updated = await db.query(
     `UPDATE users
      SET name = COALESCE($1, name),
          email = COALESCE($2, email),
-         is_admin = COALESCE($3, is_admin),
-         admin_role = CASE WHEN $4 THEN $5 ELSE admin_role END,
-         id_verified = COALESCE($6, id_verified),
-         is_active = COALESCE($7, is_active),
-         token_version = CASE WHEN $8 THEN token_version + 1 ELSE token_version END,
+         is_admin = $3,
+         admin_role = $4,
+         id_verified = COALESCE($5, id_verified),
+         is_active = COALESCE($6, is_active),
+         token_version = CASE WHEN $7 THEN token_version + 1 ELSE token_version END,
          updated_at = NOW()
-     WHERE id = $9
+     WHERE id = $8
      RETURNING ${USER_COLS}`,
     [
       name !== undefined ? String(name).trim() : null,
       email !== undefined ? String(email).toLowerCase().trim() : null,
-      is_admin !== undefined ? Boolean(is_admin) : null,
-      hasAdminRoleKey,
-      normalizedRole,
+      nextIsAdmin,
+      nextRole,
       id_verified !== undefined ? Boolean(id_verified) : null,
       is_active !== undefined ? Boolean(is_active) : null,
       shouldRevokeSessions,
       userId,
     ]
   );
-  if (updated.rowCount === 0) {
-    res.status(404).json({ detail: 'User not found' });
-    return;
-  }
   await writeAuditLog(db, {
     actorId: req.user.id,
     action: 'UPDATE_USER',
@@ -378,7 +405,79 @@ router.put('/users/:user_id', requireFullAdmin, async (req, res) => {
   invalidateCachePrefix('auth:');
   invalidateCachePrefix('admin:');
   invalidateCachePrefix('faculty:');
+  invalidateCachePrefix('metrics:');
   res.json(formatUserResponse(updated.rows[0]));
+});
+
+router.put('/users/:user_id/reset-password', requireFullAdmin, async (req, res) => {
+  const userId = parsePositiveInt(req.params.user_id);
+  if (!userId) {
+    res.status(400).json({ detail: 'Invalid user ID' });
+    return;
+  }
+  const newPassword = String(req.body?.new_password || '');
+  if (newPassword.length < 8) {
+    res.status(400).json({ detail: 'New password must be at least 8 characters' });
+    return;
+  }
+  const db = await getDb();
+  const hash = await hashPasswordNonBlocking(newPassword, 10);
+  const updated = await db.query(
+    `UPDATE users
+     SET password_hash = $1, token_version = token_version + 1, updated_at = NOW()
+     WHERE id = $2
+     RETURNING id, email, name`,
+    [hash, userId]
+  );
+  if (updated.rowCount === 0) {
+    res.status(404).json({ detail: 'User not found' });
+    return;
+  }
+  await writeAuditLog(db, {
+    actorId: req.user.id,
+    action: 'ADMIN_RESET_PASSWORD',
+    entityType: 'USER',
+    entityId: userId,
+    metadata: { email: updated.rows[0].email },
+  });
+  invalidateCachePrefix('auth:');
+  invalidateCachePrefix('admin:');
+  res.json({ message: `Password reset for ${updated.rows[0].email}` });
+});
+
+router.get('/audit-logs', requireAdminPanelStaff, async (req, res) => {
+  const db = await getDb();
+  const page = parsePositiveInt(req.query.page) || 1;
+  const limit = Math.min(100, parsePositiveInt(req.query.limit) || 50);
+  const offset = (page - 1) * limit;
+  const action = String(req.query.action || '').trim().toUpperCase();
+
+  const whereClause = action ? 'WHERE UPPER(al.action) = $1' : '';
+  const countParams = action ? [action] : [];
+  const queryParams = action ? [action, limit, offset] : [limit, offset];
+
+  const [countRes, rowsRes] = await Promise.all([
+    db.query(`SELECT COUNT(*)::int AS total FROM audit_logs al ${whereClause}`, countParams),
+    db.query(
+      `SELECT al.id, al.actor_id, u.name AS actor_name, u.email AS actor_email,
+              al.action, al.entity_type, al.entity_id, al.metadata, al.created_at
+       FROM audit_logs al
+       LEFT JOIN users u ON u.id = al.actor_id
+       ${whereClause}
+       ORDER BY al.created_at DESC
+       LIMIT $${action ? 2 : 1} OFFSET $${action ? 3 : 2}`,
+      queryParams
+    ),
+  ]);
+
+  const total = Number(countRes.rows[0]?.total || 0);
+  res.setHeader('X-Total-Count', String(total));
+  res.json({
+    items: rowsRes.rows,
+    total,
+    page,
+    limit,
+  });
 });
 
 router.delete('/users/:user_id', requireFullAdmin, async (req, res) => {

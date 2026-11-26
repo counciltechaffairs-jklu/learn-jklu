@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { AlertCircle, CheckCircle, XCircle, Edit2, Trash2, LogOut, BarChart3, User, Eye, Database, Activity, Book, Upload, Shield, ArrowLeft } from 'lucide-react';
+import { AlertCircle, CheckCircle, XCircle, Edit2, Trash2, LogOut, BarChart3, User, Eye, Database, Activity, Book, Upload, Shield, ArrowLeft, KeyRound, RefreshCw, FileSpreadsheet, Plus, Download, FileText } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { API } from '@/utils/api';
+import { classroomApi } from '@/utils/classroomApi';
+import { getAdminSecretPath } from '@/utils/postLoginRedirect';
 import FilePreviewModal from '@/components/papers/FilePreviewModal';
+import { ReleaseCourseModal } from '@/components/classroom/ReleaseCourseModal';
 import { buildUploadUrl } from '@/utils/uploads';
 import JKLULogo from '@/components/layout/JKLULogo';
-import ThemeSwitcher from '@/components/layout/ThemeSwitcher';
 import AuthenticatedUploadPreview from './components/AuthenticatedUploadPreview';
 import ConfirmDialogModal from './components/ConfirmDialogModal';
 import type {
@@ -29,14 +31,21 @@ const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('dashboard');
 
-  // Admin permission check - redirect if not admin
+  // Admin permission check — stays on /:secretSlug if signed out so SecretAdminGate shows AdminLogin
   useEffect(() => {
     if (!authLoading) {
+      const allowedRoles = new Set(['full_admin', 'sub_admin', 'paper_admin', 'coding_ta']);
+      const canAccess = Boolean(
+        user && (user.is_admin || (user.admin_role && allowedRoles.has(user.admin_role)))
+      );
       if (!user) {
-        // Not logged in, redirect to admin login
-        navigate('/admin-login', { replace: true });
-      } else if (!user.is_admin) {
-        // Logged in but not admin, redirect to home
+        const secretPath = getAdminSecretPath();
+        if (secretPath) {
+          navigate(secretPath, { replace: true });
+        } else {
+          navigate('/home', { replace: true });
+        }
+      } else if (!canAccess) {
         navigate('/home', { replace: true });
       }
     }
@@ -51,6 +60,13 @@ const AdminDashboard: React.FC = () => {
   const [usersLoading, setUsersLoading] = useState(false);
   const [userEditModal, setUserEditModal] = useState({ isOpen: false, user: null as AdminUser | null });
   const [userEditForm, setUserEditForm] = useState({ is_admin: false, admin_role: '' });
+  const [resetPwdModal, setResetPwdModal] = useState<{ isOpen: boolean; user: AdminUser | null }>({ isOpen: false, user: null });
+  const [resetPwdValue, setResetPwdValue] = useState('');
+  const [resettingPwd, setResettingPwd] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditTotal, setAuditTotal] = useState(0);
   const [message, setMessage] = useState({ type: '', text: '' });
   const [fileDiagnostics, setFileDiagnostics] = useState<any>(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
@@ -84,6 +100,16 @@ const AdminDashboard: React.FC = () => {
   // Faculty Management state
   const [facultyList, setFacultyList] = useState<any[]>([]);
   const [facultyLoading, setFacultyLoading] = useState(false);
+
+  // Classrooms & Rosters Management state (IT Admin)
+  const [classroomsList, setClassroomsList] = useState<any[]>([]);
+  const [classroomsLoading, setClassroomsLoading] = useState(false);
+  const [showReleaseCourseModal, setShowReleaseCourseModal] = useState(false);
+  const [uploadingRosterOfferingId, setUploadingRosterOfferingId] = useState<number | null>(null);
+  const [rosterUploadSummary, setRosterUploadSummary] = useState<{
+    offeringId: number;
+    data: any;
+  } | null>(null);
   const [facultyForm, setFacultyForm] = useState({
     name: '',
     email: '',
@@ -184,7 +210,7 @@ const AdminDashboard: React.FC = () => {
   );
   const [maintenanceLoading, setMaintenanceLoading] = useState(false);
 
-  const token = localStorage.getItem('token');
+  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
 
   useEffect(() => {
     if (token) {
@@ -288,7 +314,46 @@ const AdminDashboard: React.FC = () => {
     if (activeTab === 'faculty') {
       fetchFacultyList();
     }
+    if (activeTab === 'classrooms' && token) {
+      fetchClassrooms();
+    }
+    if (activeTab === 'audit-logs' && token) {
+      fetchAuditLogs(1);
+    }
   }, [activeTab, token]);
+
+  const fetchClassrooms = async () => {
+    setClassroomsLoading(true);
+    try {
+      const data = await classroomApi.listOfferings();
+      setClassroomsList(Array.isArray(data?.items) ? data.items : []);
+    } catch {
+      showMessage('error', 'Failed to load classrooms');
+    } finally {
+      setClassroomsLoading(false);
+    }
+  };
+
+  const handleAdminUploadRosterFile = async (offeringId: number, file: File | null | undefined) => {
+    if (!file || uploadingRosterOfferingId) return;
+    setUploadingRosterOfferingId(offeringId);
+    setRosterUploadSummary(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const data = await classroomApi.uploadRoster(offeringId, fd);
+      setRosterUploadSummary({ offeringId, data });
+      showMessage('success', data?.message || 'Student email roster imported!');
+      fetchClassrooms();
+    } catch (err: any) {
+      showMessage(
+        'error',
+        err?.response?.data?.detail || err?.message || 'Failed to upload roster file'
+      );
+    } finally {
+      setUploadingRosterOfferingId(null);
+    }
+  };
 
   const fetchFacultyList = async () => {
     setFacultyLoading(true);
@@ -642,6 +707,42 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
+  const fetchAuditLogs = async (pageNum = 1) => {
+    setAuditLoading(true);
+    try {
+      const res = await API.client.get(`/admin/audit-logs?page=${pageNum}&limit=50`);
+      setAuditLogs(Array.isArray(res.data?.items) ? res.data.items : []);
+      setAuditTotal(Number(res.data?.total || 0));
+      setAuditPage(pageNum);
+    } catch (err: any) {
+      showMessage('error', err?.message || 'Failed to load audit logs');
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  const submitResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetPwdModal.user || resettingPwd) return;
+    if (resetPwdValue.length < 8) {
+      showMessage('error', 'New password must be at least 8 characters');
+      return;
+    }
+    setResettingPwd(true);
+    try {
+      const res = await API.client.put(`/admin/users/${resetPwdModal.user.id}/reset-password`, {
+        new_password: resetPwdValue,
+      });
+      showMessage('success', res.data?.message || 'User password reset successfully');
+      setResetPwdModal({ isOpen: false, user: null });
+      setResetPwdValue('');
+    } catch (err: any) {
+      showMessage('error', err?.message || 'Failed to reset user password');
+    } finally {
+      setResettingPwd(false);
+    }
+  };
+
   const handleRejectProfile = (userId: number) => {
     setProfileRejectionModal({ isOpen: true, userId, feedback: '' });
   };
@@ -728,7 +829,6 @@ const AdminDashboard: React.FC = () => {
                 </div>
               </div>
               <div className="flex items-center gap-2 sm:hidden">
-                <ThemeSwitcher />
                 <JKLULogo size="sm" className="opacity-90" />
               </div>
             </div>
@@ -742,7 +842,6 @@ const AdminDashboard: React.FC = () => {
                 <span>Archive</span>
               </button>
               <div className="hidden sm:flex items-center gap-2">
-                <ThemeSwitcher />
                 <JKLULogo size="sm" className="opacity-90" />
               </div>
               <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-mono-tabular">
@@ -898,16 +997,16 @@ const AdminDashboard: React.FC = () => {
 
           {/* Glassmorphic Tabs */}
           <div className="bg-white/85 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-white/10 rounded-2xl p-2 flex gap-1.5 overflow-x-auto shadow-sm custom-scrollbar">
-            {['dashboard', 'upload', 'all-papers', 'pending', 'courses', 'faculty', 'hosts', 'users'].map(tab => (
+            {['dashboard', 'upload', 'all-papers', 'pending', 'courses', 'classrooms', 'faculty', 'hosts', 'users', 'audit-logs'].map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`flex-none px-4 sm:px-5 py-2.5 rounded-xl font-mono-tabular font-semibold text-xs sm:text-sm transition-all whitespace-nowrap ${activeTab === tab
+                className={`flex-none px-4 sm:px-5 py-2.5 rounded-xl font-mono-tabular font-semibold text-xs sm:text-sm transition-[background-color,border-color,color,transform] duration-150 whitespace-nowrap ${activeTab === tab
                   ? 'bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] shadow-sm'
                   : 'text-[#5C5B57] dark:text-[#94938E] hover:bg-[#896ABD]/10 hover:text-[#0A0A0C] dark:hover:text-white'
                   }`}
               >
-                {tab === 'dashboard' ? 'Overview' : tab === 'upload' ? 'Upload' : tab === 'all-papers' ? 'Documents' : tab === 'pending' ? 'Pending' : tab === 'courses' ? 'Courses' : tab === 'faculty' ? 'Faculty' : tab === 'hosts' ? 'Hosts' : 'Users'}
+                {tab === 'dashboard' ? 'Overview' : tab === 'upload' ? 'Upload' : tab === 'all-papers' ? 'Documents' : tab === 'pending' ? 'Pending' : tab === 'courses' ? 'Courses' : tab === 'classrooms' ? 'Classrooms & Rosters' : tab === 'faculty' ? 'Faculty' : tab === 'hosts' ? 'Sub-Admins' : tab === 'audit-logs' ? 'Audit Logs' : 'Users'}
               </button>
             ))}
           </div>
@@ -938,8 +1037,8 @@ const AdminDashboard: React.FC = () => {
                     key={stat.label}
                     initial={{ opacity: 0, y: 16 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.05 }}
-                    className="relative overflow-hidden rounded-2xl bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-white/10 p-6 shadow-sm hover:border-[#896ABD]/60 transition-all"
+                    transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+                    className="relative overflow-hidden rounded-2xl bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-white/10 p-6 shadow-sm hover:border-[#896ABD]/60 transition-[background-color,border-color,color,transform] duration-150"
                   >
                     <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${stat.color}`} />
                     <div className="flex items-center justify-between mb-3">
@@ -978,7 +1077,7 @@ const AdminDashboard: React.FC = () => {
                   <motion.button
                     onClick={runFileDiagnostics}
                     disabled={diagnosticsLoading}
-                    className="flex items-center justify-center space-x-2 px-4 py-2 bg-yellow-500/20 border border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/30 rounded-lg font-mono transition-all disabled:opacity-50 w-full sm:w-auto"
+                    className="flex items-center justify-center space-x-2 px-4 py-2 bg-amber-50 border border-amber-300 text-amber-800 hover:bg-amber-100 rounded-lg font-mono transition-[background-color,border-color,color,transform] duration-150 disabled:opacity-50 w-full sm:w-auto"
                     whileHover={{ scale: diagnosticsLoading ? 1 : 1.05 }}
                     whileTap={{ scale: diagnosticsLoading ? 1 : 0.95 }}
                   >
@@ -989,37 +1088,37 @@ const AdminDashboard: React.FC = () => {
 
                 {/* File Diagnostics Results */}
                 {fileDiagnostics && (
-                  <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-4 mb-6">
-                    <h3 className="text-sm font-mono text-yellow-400/70 mb-3 uppercase">FILE DIAGNOSTICS</h3>
+                  <div className="bg-white border border-[#E5E2DC] shadow-sm rounded-xl p-4 mb-6">
+                    <h3 className="text-sm font-mono text-amber-800 font-semibold mb-3 uppercase">FILE DIAGNOSTICS</h3>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                      <div className="bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg p-3 border border-yellow-500/20">
-                        <div className="text-xs text-yellow-400/50 font-mono uppercase mb-1">TOTAL PAPERS</div>
-                        <div className="text-2xl font-bold text-yellow-400 font-mono">{fileDiagnostics.total_papers}</div>
+                      <div className="bg-[#FAF9F6] rounded-lg p-3 border border-amber-300">
+                        <div className="text-xs text-amber-800 font-mono uppercase mb-1">TOTAL PAPERS</div>
+                        <div className="text-2xl font-bold text-amber-900 font-mono">{fileDiagnostics.total_papers}</div>
                       </div>
-                      <div className="bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg p-3 border border-yellow-500/20">
-                        <div className="text-xs text-yellow-400/50 font-mono uppercase mb-1">FILES ON DISK</div>
-                        <div className="text-2xl font-bold text-yellow-400 font-mono">{fileDiagnostics.files_on_disk_count}</div>
+                      <div className="bg-[#FAF9F6] rounded-lg p-3 border border-amber-300">
+                        <div className="text-xs text-amber-800 font-mono uppercase mb-1">FILES ON DISK</div>
+                        <div className="text-2xl font-bold text-amber-900 font-mono">{fileDiagnostics.files_on_disk_count}</div>
                       </div>
-                      <div className={`bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 rounded-lg p-3 border ${fileDiagnostics.papers_with_missing_files > 0 ? 'border-red-500/50' : 'border-[#E5E2DC] dark:border-[#232329]'}`}>
-                        <div className="text-xs font-mono uppercase mb-1" style={{ color: fileDiagnostics.papers_with_missing_files > 0 ? 'rgba(239, 68, 68, 0.5)' : 'rgba(34, 197, 94, 0.5)' }}>
+                      <div className={`bg-[#FAF9F6] rounded-lg p-3 border ${fileDiagnostics.papers_with_missing_files > 0 ? 'border-rose-400 bg-rose-50' : 'border-[#E5E2DC]'}`}>
+                        <div className={`text-xs font-mono uppercase mb-1 font-semibold ${fileDiagnostics.papers_with_missing_files > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
                           MISSING FILES
                         </div>
-                        <div className={`text-2xl font-bold font-mono ${fileDiagnostics.papers_with_missing_files > 0 ? 'text-red-400' : 'text-[#0A0A0C] dark:text-[#F5F4F0]'}`}>
+                        <div className={`text-2xl font-bold font-mono ${fileDiagnostics.papers_with_missing_files > 0 ? 'text-rose-700' : 'text-[#0A0A0C]'}`}>
                           {fileDiagnostics.papers_with_missing_files}
                         </div>
                       </div>
                     </div>
-                    <div className="text-xs text-yellow-400/50 font-mono">
-                      <span className="text-yellow-400/70">UPLOADS_DIR:</span> {fileDiagnostics.uploads_directory}
+                    <div className="text-xs text-[#5C5B57] font-mono">
+                      <span className="font-semibold text-[#0A0A0C]">UPLOADS_DIR:</span> {fileDiagnostics.uploads_directory}
                     </div>
                     {fileDiagnostics.papers_with_missing_files > 0 && (
                       <div className="mt-4 max-h-60 overflow-y-auto">
-                        <div className="text-xs text-red-400/70 font-mono uppercase mb-2">PAPERS WITH MISSING FILES:</div>
+                        <div className="text-xs text-rose-700 font-semibold font-mono uppercase mb-2">PAPERS WITH MISSING FILES:</div>
                         {fileDiagnostics.papers.filter((p: any) => !p.file_exists).map((p: any) => (
-                          <div key={p.paper_id} className="bg-red-900/20 border border-red-500/30 rounded p-2 mb-2 text-xs font-mono">
-                            <div className="text-red-400">ID: {p.paper_id} - {p.paper_title}</div>
-                            <div className="text-red-400/70">Stored: {p.stored_path}</div>
-                            <div className="text-red-400/70">Expected: {p.extracted_filename}</div>
+                          <div key={p.paper_id} className="bg-rose-50 border border-rose-300 rounded p-2 mb-2 text-xs font-mono">
+                            <div className="text-rose-800 font-semibold">ID: {p.paper_id} - {p.paper_title}</div>
+                            <div className="text-rose-700">Stored: {p.stored_path}</div>
+                            <div className="text-rose-700">Expected: {p.extracted_filename}</div>
                           </div>
                         ))}
                       </div>
@@ -1028,7 +1127,7 @@ const AdminDashboard: React.FC = () => {
                 )}
 
                 {/* Filters */}
-                <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-4 mb-6">
+                <div className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-4 mb-6">
                   <h3 className="text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-3 uppercase">FILTERS</h3>
                   <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
                     <select
@@ -1085,7 +1184,7 @@ const AdminDashboard: React.FC = () => {
                 </div>
 
                 {allPapers.length === 0 ? (
-                  <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-8 text-center">
+                  <div className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-8 text-center">
                     <Database className="h-12 w-12 text-[#5C5B57] dark:text-[#94938E] mx-auto mb-3" />
                     <p className="text-[#5C5B57] dark:text-[#94938E] font-mono">NO_PAPERS_FOUND</p>
                   </div>
@@ -1096,8 +1195,8 @@ const AdminDashboard: React.FC = () => {
                         key={paper.id}
                         initial={{ opacity: 0, x: -20 }}
                         animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: index * 0.05 }}
-                        className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 hover:border-cyan-500/60 transition-all shadow-lg hover:shadow-cyan-500/10"
+                        transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+                        className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 hover:border-cyan-500/60 transition-[background-color,border-color,color,transform] duration-150 shadow-lg hover:shadow-cyan-500/10"
                       >
                         <div className="flex flex-col sm:flex-row items-start justify-between mb-4 gap-4">
                           <div className="flex-1 w-full">
@@ -1110,9 +1209,9 @@ const AdminDashboard: React.FC = () => {
                             </div>
                           </div>
                           <div className="flex flex-row sm:flex-col gap-2 items-center sm:items-end w-full sm:w-auto">
-                            <span className={`px-2 sm:px-3 py-1 border text-[10px] sm:text-xs font-mono rounded-lg ${paper.status === 'approved' ? 'bg-[#896ABD]/15 border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0]' :
-                              paper.status === 'rejected' ? 'bg-red-500/20 border-red-500/50 text-red-400' :
-                                'bg-yellow-500/20 border-yellow-500/50 text-yellow-400'
+                            <span className={`px-2 sm:px-3 py-1 border text-[10px] sm:text-xs font-mono rounded-lg ${paper.status === 'approved' ? 'bg-emerald-50 border-emerald-300 text-emerald-800' :
+                              paper.status === 'rejected' ? 'bg-rose-50 border-rose-300 text-rose-700 font-semibold' :
+                                'bg-amber-50 border-amber-300 text-amber-800 font-semibold'
                               }`}>
                               {paper.status?.toUpperCase() || 'PENDING'}
                             </span>
@@ -1158,7 +1257,7 @@ const AdminDashboard: React.FC = () => {
                                 });
                               }}
                               disabled={!paper.file_name}
-                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-[background-color,border-color,color,transform] duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
                               whileHover={{ scale: paper.file_name ? 1.05 : 1, boxShadow: paper.file_name ? '0 0 15px rgba(6, 182, 212, 0.5)' : 'none' }}
                               whileTap={{ scale: paper.file_name ? 0.95 : 1 }}
                             >
@@ -1167,7 +1266,7 @@ const AdminDashboard: React.FC = () => {
                             </motion.button>
                             <motion.button
                               onClick={() => openEditModal(paper)}
-                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all"
+                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-[background-color,border-color,color,transform] duration-150"
                               whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(168, 85, 247, 0.5)' }}
                               whileTap={{ scale: 0.95 }}
                             >
@@ -1177,7 +1276,7 @@ const AdminDashboard: React.FC = () => {
                             {paper.status !== 'approved' && (
                               <motion.button
                                 onClick={() => reviewPaper(paper.id, 'approved')}
-                                className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all"
+                                className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-[background-color,border-color,color,transform] duration-150"
                                 whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(34, 197, 94, 0.5)' }}
                                 whileTap={{ scale: 0.95 }}
                               >
@@ -1188,7 +1287,7 @@ const AdminDashboard: React.FC = () => {
                             {paper.status !== 'rejected' && (
                               <motion.button
                                 onClick={() => handleRejectPaper(paper.id)}
-                                className="flex items-center space-x-2 px-4 py-2 bg-red-500/20 border border-red-500/50 text-red-400 hover:bg-red-500/30 rounded-lg font-mono transition-all"
+                                className="flex items-center space-x-2 px-4 py-2 bg-red-500/20 border border-red-500/50 text-red-400 hover:bg-red-500/30 rounded-lg font-mono transition-[background-color,border-color,color,transform] duration-150"
                                 whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(239, 68, 68, 0.5)' }}
                                 whileTap={{ scale: 0.95 }}
                               >
@@ -1198,7 +1297,7 @@ const AdminDashboard: React.FC = () => {
                             )}
                             <motion.button
                               onClick={() => deletePaper(paper.id)}
-                              className="flex items-center space-x-2 px-4 py-2 bg-red-900/40 border border-red-500/70 text-red-200 hover:bg-red-800/60 rounded-lg font-mono transition-all"
+                              className="flex items-center space-x-2 px-4 py-2 bg-red-900/40 border border-red-500/70 text-red-200 hover:bg-red-800/60 rounded-lg font-mono transition-[background-color,border-color,color,transform] duration-150"
                               whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(239, 68, 68, 0.8)' }}
                               whileTap={{ scale: 0.95 }}
                             >
@@ -1225,14 +1324,14 @@ const AdminDashboard: React.FC = () => {
             >
               {/* ID Verification Requests Section */}
               <div>
-                <h2 className="text-xl sm:text-2xl font-bold mb-4 font-mono bg-gradient-to-r from-yellow-400 to-orange-400 bg-clip-text text-transparent flex items-center gap-3">
-                  <User className="text-yellow-400 flex-shrink-0" size={24} />
+                <h2 className="text-xl sm:text-2xl font-bold mb-4 font-mono text-amber-800 flex items-center gap-3">
+                  <User className="text-amber-700 flex-shrink-0" size={24} />
                   ID_VERIFICATION_REQUESTS [{verificationRequests.length}]
                 </h2>
                 {verificationRequests.length === 0 ? (
-                  <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-8 text-center">
-                    <User className="h-12 w-12 text-yellow-400/50 mx-auto mb-3" />
-                    <p className="text-yellow-400/70 font-mono">NO_PENDING_VERIFICATION_REQUESTS</p>
+                  <div className="bg-white border border-[#E5E2DC] shadow-sm rounded-xl p-8 text-center">
+                    <User className="h-12 w-12 text-amber-700/60 mx-auto mb-3" />
+                    <p className="text-amber-800 font-mono">NO_PENDING_VERIFICATION_REQUESTS</p>
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -1241,25 +1340,25 @@ const AdminDashboard: React.FC = () => {
                         key={request.id}
                         initial={{ opacity: 0, x: -20 }}
                         animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: index * 0.1 }}
-                        className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 hover:border-yellow-500/60 transition-all shadow-lg hover:shadow-yellow-500/10"
+                        transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+                        className="bg-white border border-[#E5E2DC] shadow-sm rounded-xl p-6 hover:border-amber-400 transition-[background-color,border-color,color,transform] duration-150"
                       >
                         <div className="flex items-start justify-between mb-4">
                           <div className="flex-1 w-full">
-                            <h3 className="text-lg sm:text-xl font-bold text-yellow-400 font-mono mb-2 break-words">{request.name}</h3>
-                            <div className="text-xs sm:text-sm text-yellow-400/70 font-mono mb-1 truncate">
-                              <span className="text-[#0A0A0C] dark:text-[#F5F4F0]">EMAIL:</span> {request.email}
+                            <h3 className="text-lg sm:text-xl font-bold text-[#0A0A0C] font-mono mb-2 break-words">{request.name}</h3>
+                            <div className="text-xs sm:text-sm text-[#353430] font-mono mb-1 truncate">
+                              <span className="font-semibold text-[#0A0A0C]">EMAIL:</span> {request.email}
                             </div>
                             {(request.university || request.department || request.roll_no) && (
-                              <div className="text-xs sm:text-sm text-yellow-400/50 font-mono space-y-1 sm:space-y-0 sm:space-x-2">
-                                {request.university && <p className="inline-block"><span className="text-[#0A0A0C] dark:text-[#F5F4F0]">UNI:</span> {request.university}</p>}
-                                {request.department && <p className="inline-block"><span className="text-[#0A0A0C] dark:text-[#F5F4F0]">DEPT:</span> {request.department}</p>}
-                                {request.roll_no && <p className="inline-block"><span className="text-[#0A0A0C] dark:text-[#F5F4F0]">ROLL:</span> {request.roll_no}</p>}
+                              <div className="text-xs sm:text-sm text-[#5C5B57] font-mono space-y-1 sm:space-y-0 sm:space-x-2">
+                                {request.university && <p className="inline-block"><span className="font-semibold text-[#0A0A0C]">UNI:</span> {request.university}</p>}
+                                {request.department && <p className="inline-block"><span className="font-semibold text-[#0A0A0C]">DEPT:</span> {request.department}</p>}
+                                {request.roll_no && <p className="inline-block"><span className="font-semibold text-[#0A0A0C]">ROLL:</span> {request.roll_no}</p>}
                               </div>
                             )}
                           </div>
                           <div className="mt-2 sm:mt-0">
-                            <span className="px-2 sm:px-4 py-1 sm:py-2 bg-yellow-500/20 border border-yellow-500/50 text-yellow-400 text-[10px] sm:text-xs font-mono rounded-lg whitespace-nowrap">
+                            <span className="px-2 sm:px-4 py-1 sm:py-2 bg-amber-50 border border-amber-300 text-amber-800 font-semibold text-[10px] sm:text-xs font-mono rounded-lg whitespace-nowrap">
                               PENDING
                             </span>
                           </div>
@@ -1268,7 +1367,7 @@ const AdminDashboard: React.FC = () => {
                         <div className="flex items-center justify-end pt-4 border-t border-yellow-500/20">
                           <motion.button
                             onClick={() => setVerificationModal({ isOpen: true, user: request })}
-                            className="flex items-center space-x-2 px-6 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all"
+                            className="flex items-center space-x-2 px-6 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-[background-color,border-color,color,transform] duration-150"
                             whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(6, 182, 212, 0.5)' }}
                             whileTap={{ scale: 0.95 }}
                           >
@@ -1293,7 +1392,7 @@ const AdminDashboard: React.FC = () => {
                     <motion.button
                       onClick={handleApproveAll}
                       disabled={loading}
-                      className="flex items-center justify-center space-x-2 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-black font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all disabled:opacity-50 w-full sm:w-auto"
+                      className="flex items-center justify-center space-x-2 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-black font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-[background-color,border-color,color,transform] duration-150 disabled:opacity-50 w-full sm:w-auto"
                       whileHover={{ scale: loading ? 1 : 1.05, boxShadow: loading ? 'none' : '0 0 20px rgba(34, 197, 94, 0.5)' }}
                       whileTap={{ scale: loading ? 1 : 0.95 }}
                     >
@@ -1303,7 +1402,7 @@ const AdminDashboard: React.FC = () => {
                   )}
                 </div>
                 {pendingPapers.length === 0 ? (
-                  <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-8 text-center">
+                  <div className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-8 text-center">
                     <Database className="h-12 w-12 text-[#5C5B57] dark:text-[#94938E] mx-auto mb-3" />
                     <p className="text-[#5C5B57] dark:text-[#94938E] font-mono">NO_PENDING_PAPERS</p>
                   </div>
@@ -1314,8 +1413,8 @@ const AdminDashboard: React.FC = () => {
                         key={paper.id}
                         initial={{ opacity: 0, x: -20 }}
                         animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: index * 0.1 }}
-                        className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 hover:border-blue-500/60 transition-all shadow-lg hover:shadow-blue-500/10"
+                        transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+                        className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 hover:border-blue-500/60 transition-[background-color,border-color,color,transform] duration-150 shadow-lg hover:shadow-blue-500/10"
                       >
                         <div className="flex items-start justify-between mb-4">
                           <div className="flex-1">
@@ -1368,7 +1467,7 @@ const AdminDashboard: React.FC = () => {
                                 });
                               }}
                               disabled={!paper.file_name}
-                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-[background-color,border-color,color,transform] duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
                               whileHover={{ scale: paper.file_name ? 1.05 : 1, boxShadow: paper.file_name ? '0 0 15px rgba(6, 182, 212, 0.5)' : 'none' }}
                               whileTap={{ scale: paper.file_name ? 0.95 : 1 }}
                             >
@@ -1377,7 +1476,7 @@ const AdminDashboard: React.FC = () => {
                             </motion.button>
                             <motion.button
                               onClick={() => openEditModal(paper)}
-                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all"
+                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-[background-color,border-color,color,transform] duration-150"
                               whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(168, 85, 247, 0.5)' }}
                               whileTap={{ scale: 0.95 }}
                             >
@@ -1386,7 +1485,7 @@ const AdminDashboard: React.FC = () => {
                             </motion.button>
                             <motion.button
                               onClick={() => reviewPaper(paper.id, 'approved')}
-                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-all"
+                              className="flex items-center space-x-2 px-4 py-2 bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/25 rounded-lg font-mono transition-[background-color,border-color,color,transform] duration-150"
                               whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(34, 197, 94, 0.5)' }}
                               whileTap={{ scale: 0.95 }}
                             >
@@ -1397,8 +1496,8 @@ const AdminDashboard: React.FC = () => {
                               onClick={() => {
                                 handleRejectPaper(paper.id);
                               }}
-                              className="flex items-center space-x-2 px-4 py-2 bg-red-500/20 border border-red-500/50 text-red-400 hover:bg-red-500/30 rounded-lg font-mono transition-all"
-                              whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(239, 68, 68, 0.5)' }}
+                              className="flex items-center space-x-2 px-4 py-2 bg-rose-50 border border-rose-300 text-rose-700 hover:bg-rose-100 rounded-lg font-mono font-semibold transition-[background-color,border-color,color,transform] duration-150"
+                              whileHover={{ scale: 1.05, boxShadow: '0 0 15px rgba(239, 68, 68, 0.25)' }}
                               whileTap={{ scale: 0.95 }}
                             >
                               <XCircle size={18} />
@@ -1430,7 +1529,7 @@ const AdminDashboard: React.FC = () => {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.4 }}
-                className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 shadow-lg"
+                className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 shadow-lg"
               >
                 <form onSubmit={handleUpload} className="space-y-6">
                   {/* Course Selection */}
@@ -1626,7 +1725,7 @@ const AdminDashboard: React.FC = () => {
                   <motion.button
                     type="submit"
                     disabled={uploading || !selectedFile}
-                    className="w-full bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono py-3 px-4 rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                    className="w-full bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono py-3 px-4 rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-[background-color,border-color,color,transform] duration-150 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                     whileHover={{ scale: uploading || !selectedFile ? 1 : 1.02 }}
                     whileTap={{ scale: uploading || !selectedFile ? 1 : 0.98 }}
                   >
@@ -1667,7 +1766,7 @@ const AdminDashboard: React.FC = () => {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.4 }}
-                className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 mb-6 shadow-lg"
+                className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 mb-6 shadow-lg"
               >
                 <h3 className="text-xl font-bold mb-4 text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">
                   {editingCourse ? 'EDIT_COURSE' : 'ADD_NEW_COURSE'}
@@ -1715,7 +1814,7 @@ const AdminDashboard: React.FC = () => {
                     <motion.button
                       onClick={handleCourseSubmit}
                       disabled={loading || !courseForm.code || !courseForm.name}
-                      className="w-full sm:w-auto px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all"
+                      className="w-full sm:w-auto px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-[#896ABD]/30 transition-[background-color,border-color,color,transform] duration-150"
                       whileHover={{ scale: loading || !courseForm.code || !courseForm.name ? 1 : 1.02 }}
                       whileTap={{ scale: loading || !courseForm.code || !courseForm.name ? 1 : 0.98 }}
                     >
@@ -1727,7 +1826,7 @@ const AdminDashboard: React.FC = () => {
                           setEditingCourse(null);
                           setCourseForm({ code: '', name: '', description: '' });
                         }}
-                        className="w-full sm:w-auto px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-all"
+                        className="w-full sm:w-auto px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-[background-color,border-color,color,transform] duration-150"
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
                       >
@@ -1745,8 +1844,8 @@ const AdminDashboard: React.FC = () => {
                     key={course.id}
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.1 }}
-                    className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 hover:border-green-500/60 transition-all"
+                    transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+                    className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 hover:border-green-500/60 transition-[background-color,border-color,color,transform] duration-150"
                   >
                     <div className="w-full sm:w-auto">
                       <div className="font-bold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-lg break-words">
@@ -1768,7 +1867,7 @@ const AdminDashboard: React.FC = () => {
                             description: course.description || ''
                           });
                         }}
-                        className="p-2 text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] rounded-lg transition-all font-mono"
+                        className="p-2 text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/15 border border-[#E5E2DC] dark:border-[#232329] rounded-lg transition-[background-color,border-color,color,transform] duration-150 font-mono"
                         whileHover={{ scale: 1.1, boxShadow: '0 0 10px rgba(168, 85, 247, 0.5)' }}
                         whileTap={{ scale: 0.9 }}
                       >
@@ -1776,8 +1875,8 @@ const AdminDashboard: React.FC = () => {
                       </motion.button>
                       <motion.button
                         onClick={() => deleteCourse(course.id)}
-                        className="p-2 text-red-400 hover:bg-red-500/20 border border-red-500/30 rounded-lg transition-all font-mono"
-                        whileHover={{ scale: 1.1, boxShadow: '0 0 10px rgba(239, 68, 68, 0.5)' }}
+                        className="p-2 text-rose-700 hover:bg-rose-50 border border-rose-300 rounded-lg transition-[background-color,border-color,color,transform] duration-150 font-mono"
+                        whileHover={{ scale: 1.1 }}
                         whileTap={{ scale: 0.9 }}
                       >
                         <Trash2 size={18} />
@@ -1790,7 +1889,7 @@ const AdminDashboard: React.FC = () => {
 
           )}
 
-          {/* Hosts Tab */}
+          {/* Sub-Admins Tab */}
           {activeTab === 'hosts' && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -1798,61 +1897,61 @@ const AdminDashboard: React.FC = () => {
               transition={{ delay: 0.3 }}
             >
               <h2 className="text-3xl font-bold mb-6 font-mono bg-gradient-to-r from-[#896ABD] to-[#E04F33] bg-clip-text text-transparent flex items-center gap-3">
-                <User className="text-[#0A0A0C] dark:text-[#F5F4F0]" size={32} />
-                HOST_MANAGEMENT
+                <User className="text-[#0A0A0C]" size={32} />
+                SUB_ADMIN_MANAGEMENT
               </h2>
 
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.4 }}
-                className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 shadow-lg"
+                className="bg-white border border-[#E5E2DC] rounded-xl p-6 shadow-sm"
               >
-                <div className="mb-6 border-b border-[#E5E2DC] dark:border-[#232329] pb-4">
-                  <h3 className="text-xl font-bold text-[#0A0A0C] dark:text-[#F5F4F0] font-mono mb-2">CREATE_NEW_HOST</h3>
-                  <p className="text-[#5C5B57] dark:text-[#94938E] font-mono text-sm">
-                    Hosts (Sub-Admins) can create and manage weekly coding challenges but cannot access full system administration.
+                <div className="mb-6 border-b border-[#E5E2DC] pb-4">
+                  <h3 className="text-xl font-bold text-[#0A0A0C] font-mono mb-2">CREATE_SUB_ADMIN</h3>
+                  <p className="text-[#5C5B57] font-mono text-sm">
+                    Delegated Staff (paper_admin, sub_admin, or coding_ta) assist with paper moderation and ID reviews without full super-admin permissions.
                   </p>
                 </div>
 
                 <form onSubmit={handleCreateSubAdmin} className="space-y-6 max-w-2xl">
                   <div>
-                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
-                      EMAIL_ADDRESS <span className="text-red-400">*</span>
+                    <label className="block text-sm font-mono text-[#5C5B57] mb-2 uppercase">
+                      EMAIL_ADDRESS <span className="text-rose-700">*</span>
                     </label>
                     <input
                       type="email"
                       value={hostForm.email}
                       onChange={(e) => setHostForm({ ...hostForm, email: e.target.value })}
-                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
-                      placeholder="host@jklu.edu.in"
+                      className="w-full px-4 py-2 bg-[#FAF9F6] border border-[#E5E2DC] rounded-lg text-[#0A0A0C] font-mono text-sm focus:border-[#896ABD] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60"
+                      placeholder="staff@jklu.edu.in"
                       required
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
-                      FULL_NAME <span className="text-red-400">*</span>
+                    <label className="block text-sm font-mono text-[#5C5B57] mb-2 uppercase">
+                      FULL_NAME <span className="text-rose-700">*</span>
                     </label>
                     <input
                       type="text"
                       value={hostForm.name}
                       onChange={(e) => setHostForm({ ...hostForm, name: e.target.value })}
-                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
-                      placeholder="John Doe"
+                      className="w-full px-4 py-2 bg-[#FAF9F6] border border-[#E5E2DC] rounded-lg text-[#0A0A0C] font-mono text-sm focus:border-[#896ABD] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60"
+                      placeholder="Staff Name"
                       required
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-mono text-[#5C5B57] dark:text-[#94938E] mb-2 uppercase">
-                      PASSWORD <span className="text-red-400">*</span>
+                    <label className="block text-sm font-mono text-[#5C5B57] mb-2 uppercase">
+                      PASSWORD <span className="text-rose-700">*</span>
                     </label>
                     <input
                       type="password"
                       value={hostForm.password}
                       onChange={(e) => setHostForm({ ...hostForm, password: e.target.value })}
-                      className="w-full px-4 py-2 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border border-[#E5E2DC] dark:border-[#232329] rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm focus:border-[#896ABD] dark:focus:border-[#A855F7] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60 dark:placeholder-[#94938E]/60"
+                      className="w-full px-4 py-2 bg-[#FAF9F6] border border-[#E5E2DC] rounded-lg text-[#0A0A0C] font-mono text-sm focus:border-[#896ABD] focus:outline-none focus:ring-2 focus:ring-[#896ABD]/30 placeholder-[#5C5B57]/60"
                       placeholder="Min 6 characters"
                       required
                       minLength={6}
@@ -1862,7 +1961,7 @@ const AdminDashboard: React.FC = () => {
                   <motion.button
                     type="submit"
                     disabled={loading || !hostForm.email || !hostForm.name || !hostForm.password}
-                    className="w-full bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono py-3 px-4 rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                    className="w-full bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono py-3 px-4 rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-[background-color,border-color,color,transform] duration-150 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                     whileHover={{ scale: loading ? 1 : 1.02 }}
                     whileTap={{ scale: loading ? 1 : 0.98 }}
                   >
@@ -1871,14 +1970,14 @@ const AdminDashboard: React.FC = () => {
                         <motion.div
                           animate={{ rotate: 360 }}
                           transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                          className="w-5 h-5 border-2 border-black border-t-transparent rounded-full"
+                          className="w-5 h-5 border-2 border-white border-t-transparent rounded-full"
                         />
                         <span>CREATING...</span>
                       </>
                     ) : (
                       <>
                         <User className="h-5 w-5" />
-                        <span>CREATE_HOST</span>
+                        <span>CREATE_SUB_ADMIN</span>
                       </>
                     )}
                   </motion.button>
@@ -1895,23 +1994,23 @@ const AdminDashboard: React.FC = () => {
               transition={{ delay: 0.3 }}
             >
               <h2 className="text-3xl font-bold mb-6 font-mono bg-gradient-to-r from-[#896ABD] to-[#E04F33] bg-clip-text text-transparent flex items-center gap-3">
-                <User className="text-[#0A0A0C] dark:text-[#F5F4F0]" size={32} />
+                <User className="text-[#0A0A0C]" size={32} />
                 USER_MANAGEMENT
               </h2>
 
-              <div className="bg-white/90 dark:bg-[#111117]/90 backdrop-blur-md border border-[#E5E2DC] dark:border-[#232329] shadow-sm rounded-xl p-6 shadow-lg overflow-x-auto min-h-[400px]">
+              <div className="bg-white border border-[#E5E2DC] rounded-xl p-6 shadow-sm overflow-x-auto min-h-[400px]">
                 {usersLoading ? (
                   <div className="flex justify-center p-8">
                     <motion.div
                       animate={{ rotate: 360 }}
                       transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                      className="w-10 h-10 border-4 border-black border-t-green-500 rounded-full"
+                      className="w-10 h-10 border-4 border-[#E5E2DC] border-t-[#E04F33] rounded-full"
                     />
                   </div>
                 ) : (
                   <table className="w-full text-left border-collapse">
                     <thead>
-                      <tr className="border-b-2 border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] font-mono text-sm uppercase">
+                      <tr className="border-b-2 border-[#E5E2DC] text-[#0A0A0C] font-mono text-sm uppercase">
                         <th className="p-4">Name</th>
                         <th className="p-4">Email</th>
                         <th className="p-4">Admin Status</th>
@@ -1920,25 +2019,25 @@ const AdminDashboard: React.FC = () => {
                         <th className="p-4 text-right">Actions</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-green-500/10 text-[#0A0A0C] dark:text-[#F5F4F0]/80 font-mono">
+                    <tbody className="divide-y divide-[#E5E2DC]/60 text-[#0A0A0C] font-mono">
                       {users.map((u) => (
                         <motion.tr
                           key={u.id}
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
-                          className="hover:bg-green-500/5 transition-colors"
+                          className="hover:bg-[#FAF9F6] transition-colors"
                         >
                           <td className="p-4 whitespace-nowrap">{u.name}</td>
                           <td className="p-4 whitespace-nowrap">{u.email}</td>
                           <td className="p-4">
                             {u.is_admin ? (
-                              <span className="px-2 py-1 bg-[#896ABD]/15 text-[#0A0A0C] dark:text-[#F5F4F0] rounded border border-[#E5E2DC] dark:border-[#232329] text-xs">TRUE</span>
+                              <span className="px-2 py-1 bg-[#896ABD]/15 text-[#0A0A0C] rounded border border-[#E5E2DC] text-xs">TRUE</span>
                             ) : (
-                              <span className="px-2 py-1 bg-gray-500/20 text-[#5C5B57] dark:text-[#94938E] rounded border border-gray-500/30 text-xs">FALSE</span>
+                              <span className="px-2 py-1 bg-gray-100 text-[#5C5B57] rounded border border-gray-300 text-xs">FALSE</span>
                             )}
                           </td>
                           <td className="p-4">
-                            {u.admin_role ? <span className="text-[#0A0A0C] dark:text-[#F5F4F0]">{u.admin_role}</span> : <span className="text-gray-500">-</span>}
+                            {u.admin_role ? <span className="text-[#0A0A0C]">{u.admin_role}</span> : <span className="text-[#5C5B57]">-</span>}
                           </td>
                           <td className="p-4 whitespace-nowrap text-sm">
                             {new Date(u.created_at).toLocaleDateString()}
@@ -1947,14 +2046,24 @@ const AdminDashboard: React.FC = () => {
                             <div className="flex justify-end space-x-2">
                               <button
                                 onClick={() => openUserEditModal(u)}
-                                className="p-2 text-[#0A0A0C] dark:text-[#F5F4F0] hover:bg-[#896ABD]/15 border border-transparent hover:border-[#E5E2DC] dark:border-[#232329] rounded transition-all"
+                                className="p-2 text-[#0A0A0C] hover:bg-[#896ABD]/15 border border-transparent hover:border-[#E5E2DC] rounded transition-[background-color,border-color,color,transform] duration-150"
                                 title="Edit Role"
                               >
                                 <Edit2 size={16} />
                               </button>
                               <button
+                                onClick={() => {
+                                  setResetPwdValue('');
+                                  setResetPwdModal({ isOpen: true, user: u });
+                                }}
+                                className="p-2 text-[#896ABD] hover:bg-[#896ABD]/15 border border-transparent hover:border-[#896ABD]/30 rounded transition-[background-color,border-color,color,transform] duration-150"
+                                title="Reset Password"
+                              >
+                                <KeyRound size={16} />
+                              </button>
+                              <button
                                 onClick={() => deleteUser(u.id)}
-                                className="p-2 text-red-400 hover:bg-red-500/20 border border-transparent hover:border-red-500/30 rounded transition-all"
+                                className="p-2 text-rose-700 hover:bg-rose-50 border border-transparent hover:border-rose-300 rounded transition-[background-color,border-color,color,transform] duration-150"
                                 title="Delete User"
                                 disabled={u.id === user?.id}
                               >
@@ -1966,11 +2075,269 @@ const AdminDashboard: React.FC = () => {
                       ))}
                       {users.length === 0 && (
                         <tr>
-                          <td colSpan={6} className="p-8 text-center text-gray-500">No users found</td>
+                          <td colSpan={6} className="p-8 text-center text-[#5C5B57]">No users found</td>
                         </tr>
                       )}
                     </tbody>
                   </table>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {/* Audit Logs Tab */}
+          {activeTab === 'audit-logs' && (
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-2xl font-bold font-mono text-[#0A0A0C]">
+                    AUDIT_LOGS [{auditTotal}]
+                  </h2>
+                  <p className="text-xs text-[#5C5B57] font-mono">
+                    Security-sensitive admin, faculty, classroom, and password events
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => fetchAuditLogs(auditPage)}
+                  disabled={auditLoading}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[#E5E2DC] bg-white hover:border-[#896ABD] text-xs font-mono font-semibold text-[#0A0A0C] disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${auditLoading ? 'animate-spin' : ''}`} />
+                  <span>Refresh</span>
+                </button>
+              </div>
+
+              <div className="bg-white/95 border border-[#E5E2DC] rounded-xl p-5 shadow-sm overflow-x-auto">
+                {auditLoading && auditLogs.length === 0 ? (
+                  <p className="text-sm font-mono text-[#5C5B57] py-8 text-center">Loading audit logs...</p>
+                ) : (
+                  <table className="w-full text-left border-collapse text-xs font-mono">
+                    <thead>
+                      <tr className="border-b border-[#E5E2DC] text-[#5C5B57] uppercase">
+                        <th className="py-2.5 pr-4">Timestamp</th>
+                        <th className="py-2.5 pr-4">Actor</th>
+                        <th className="py-2.5 pr-4">Action</th>
+                        <th className="py-2.5 pr-4">Entity</th>
+                        <th className="py-2.5">Metadata</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E5E2DC]/60 text-[#0A0A0C]">
+                      {auditLogs.map((log) => (
+                        <tr key={log.id} className="hover:bg-[#FAF9F6]">
+                          <td className="py-2.5 pr-4 whitespace-nowrap text-[#5C5B57]">
+                            {new Date(log.created_at).toLocaleString()}
+                          </td>
+                          <td className="py-2.5 pr-4">
+                            <div className="font-semibold">{log.actor_name || 'System'}</div>
+                            {log.actor_email && <div className="text-[11px] text-[#5C5B57]">{log.actor_email}</div>}
+                          </td>
+                          <td className="py-2.5 pr-4">
+                            <span className="px-2 py-0.5 rounded bg-[#896ABD]/12 text-[#5B3B96] font-semibold">
+                              {log.action}
+                            </span>
+                          </td>
+                          <td className="py-2.5 pr-4 whitespace-nowrap">
+                            {log.entity_type} {log.entity_id ? `#${log.entity_id}` : ''}
+                          </td>
+                          <td className="py-2.5 text-[11px] text-[#5C5B57] max-w-xs truncate">
+                            {log.metadata ? JSON.stringify(log.metadata) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                      {auditLogs.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="py-8 text-center text-[#5C5B57]">No audit log entries recorded yet.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                )}
+
+                {auditTotal > 50 && (
+                  <div className="flex items-center justify-between pt-4 mt-3 border-t border-[#E5E2DC] text-xs font-mono">
+                    <span className="text-[#5C5B57]">Page {auditPage}</span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={auditPage <= 1 || auditLoading}
+                        onClick={() => fetchAuditLogs(auditPage - 1)}
+                        className="px-3 py-1 rounded border border-[#E5E2DC] disabled:opacity-40"
+                      >
+                        Prev
+                      </button>
+                      <button
+                        type="button"
+                        disabled={auditPage * 50 >= auditTotal || auditLoading}
+                        onClick={() => fetchAuditLogs(auditPage + 1)}
+                        className="px-3 py-1 rounded border border-[#E5E2DC] disabled:opacity-40"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {/* Classrooms & Excel/CSV Rosters Tab (IT Admin) */}
+          {activeTab === 'classrooms' && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-6"
+            >
+              <div className="bg-white/95 dark:bg-[#111117]/95 border border-[#E5E2DC] dark:border-white/10 rounded-2xl p-6 shadow-sm space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-xl font-bold tracking-tight flex items-center gap-2">
+                      <FileSpreadsheet className="w-5 h-5 text-[#E04F33]" />
+                      <span>Course Classrooms &amp; Student Email Rosters</span>
+                    </h2>
+                    <p className="text-xs text-[#5C5B57] dark:text-[#94938E] mt-1">
+                      IT Admins can create Core or Elective classrooms (assigning the primary professor email), upload Excel (.xlsx) / CSV student rosters, and inspect syllabus PDF status.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <a
+                      href={classroomApi.getRosterTemplateUrl()}
+                      download="JKLU_Course_Roster_Template.csv"
+                      className="px-3.5 py-2 rounded-xl border border-[#DDD8CE] bg-white hover:border-[#896ABD] text-xs font-semibold text-[#353430] inline-flex items-center gap-1.5"
+                    >
+                      <Download className="w-3.5 h-3.5 text-[#896ABD]" />
+                      <span>Roster Template (.csv)</span>
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => setShowReleaseCourseModal(true)}
+                      className="px-4 py-2 rounded-xl bg-[#E04F33] hover:opacity-90 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-sm"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Create Course Classroom</span>
+                    </button>
+                  </div>
+                </div>
+
+                {rosterUploadSummary && (
+                  <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50 text-xs text-emerald-900 space-y-1">
+                    <div className="flex items-center justify-between gap-2 font-semibold">
+                      <span>{rosterUploadSummary.data?.message}</span>
+                      <button
+                        type="button"
+                        onClick={() => setRosterUploadSummary(null)}
+                        className="underline text-[11px]"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                    <p className="font-mono-tabular text-[11px]">
+                      Imported: {rosterUploadSummary.data?.imported ?? 0} · Active linked:{' '}
+                      {rosterUploadSummary.data?.linked_existing ?? 0} · Pre-enrolled:{' '}
+                      {rosterUploadSummary.data?.pre_enrolled ?? 0} · Skipped invalid:{' '}
+                      {rosterUploadSummary.data?.skipped_invalid ?? 0}
+                    </p>
+                  </div>
+                )}
+
+                {classroomsLoading ? (
+                  <p className="text-xs text-[#5C5B57] py-6 text-center font-mono-tabular">
+                    Loading classrooms...
+                  </p>
+                ) : classroomsList.length === 0 ? (
+                  <p className="text-xs text-[#5C5B57] py-6 text-center">
+                    No course classrooms created yet. Click &ldquo;Create Course Classroom&rdquo; above to start.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {classroomsList.map((off) => (
+                      <div
+                        key={off.id}
+                        className="p-4 rounded-xl border border-[#E5E2DC] bg-[#FAF9F6] flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-xs"
+                      >
+                        <div className="space-y-1.5 min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="px-2 py-0.5 rounded bg-[#0A0A0C] text-white font-mono-tabular font-bold text-[11px]">
+                              {off.course_code}
+                            </span>
+                            <span className="font-bold text-sm text-[#0A0A0C]">
+                              {off.course_name}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded font-mono-tabular text-[10px] font-semibold ${
+                                off.is_elective
+                                  ? 'bg-[#896ABD]/15 text-[#5B3B96]'
+                                  : 'bg-emerald-500/10 text-emerald-700'
+                              }`}
+                            >
+                              {off.is_elective ? 'Elective' : 'Core'}
+                              {off.credits ? ` · ${off.credits} Credits` : ''}
+                            </span>
+                            {off.has_syllabus_pdf && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white border border-[#DDD8CE] font-mono-tabular text-[10px] text-[#353430]">
+                                <FileText className="w-3 h-3 text-[#E04F33]" />
+                                Syllabus PDF
+                              </span>
+                            )}
+                          </div>
+
+                          <p className="text-[#5C5B57]">
+                            {off.programme} · Sem {off.semester} · Batch {off.batch_year} ·{' '}
+                            {off.roster_count ?? 0} students enrolled
+                            {off.join_code ? ` · Code: ${off.join_code}` : ''}
+                          </p>
+
+                          {Array.isArray(off.instructors) && off.instructors.length > 0 && (
+                            <p className="text-[11px] text-[#353430]">
+                              Faculty:{' '}
+                              {off.instructors
+                                .map((i: any) => `${i.name} (${i.public_email})`)
+                                .join(', ')}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <label
+                            className={`px-3.5 py-2 rounded-xl bg-[#0A0A0C] hover:bg-[#E04F33] text-white font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
+                              uploadingRosterOfferingId === off.id
+                                ? 'opacity-60 pointer-events-none'
+                                : ''
+                            }`}
+                          >
+                            <Upload className="w-3.5 h-3.5" />
+                            <span>
+                              {uploadingRosterOfferingId === off.id
+                                ? 'Uploading...'
+                                : 'Upload Excel/CSV Emails'}
+                            </span>
+                            <input
+                              type="file"
+                              accept=".xlsx,.csv,.tsv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                              className="hidden"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                handleAdminUploadRosterFile(off.id, f);
+                                e.currentTarget.value = '';
+                              }}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/classroom/${off.id}`)}
+                            className="px-3.5 py-2 rounded-xl border border-[#DDD8CE] bg-white hover:border-[#896ABD] font-semibold text-[#0A0A0C]"
+                          >
+                            Open Classroom
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </motion.div>
@@ -2101,14 +2468,16 @@ const AdminDashboard: React.FC = () => {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
+            transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
             className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm"
             onClick={() => setUserEditModal({ isOpen: false, user: null })}
           >
             <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
+              initial={{ scale: 0.96, y: 8, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] shadow-2xl rounded-xl p-6 max-w-md w-full mx-4"
+              className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] shadow-[var(--shadow-elevated)] rounded-2xl p-6 max-w-md w-full mx-4"
             >
               <h3 className="text-xl font-bold text-[#0A0A0C] dark:text-[#F5F4F0] mb-6 font-mono">EDIT_USER: {userEditModal.user.name}</h3>
 
@@ -2159,7 +2528,7 @@ const AdminDashboard: React.FC = () => {
               <div className="flex space-x-4 justify-end mt-8">
                 <motion.button
                   onClick={() => setUserEditModal({ isOpen: false, user: null })}
-                  className="px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-all"
+                  className="px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-[background-color,border-color,color,transform] duration-150"
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                 >
@@ -2168,7 +2537,7 @@ const AdminDashboard: React.FC = () => {
                 <motion.button
                   onClick={() => submitUserEdit(userEditModal.user!.id)}
                   disabled={userEditModal.user.id === user?.id}
-                  className="px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-[background-color,border-color,color,transform] duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
                   whileHover={{ scale: userEditModal.user.id === user?.id ? 1 : 1.02 }}
                   whileTap={{ scale: userEditModal.user.id === user?.id ? 1 : 0.98 }}
                 >
@@ -2189,19 +2558,34 @@ const AdminDashboard: React.FC = () => {
           token={token || ''}
         />
 
+        {/* Create Course Classroom & Upload Initial Roster / Syllabus Modal (IT Admin) */}
+        <ReleaseCourseModal
+          isOpen={showReleaseCourseModal}
+          onClose={() => setShowReleaseCourseModal(false)}
+          isAdmin={true}
+          onSuccess={(data) => {
+            setShowReleaseCourseModal(false);
+            showMessage('success', data?.message || 'Course classroom created!');
+            fetchClassrooms();
+            fetchDashboardData();
+          }}
+        />
+
         {/* Verification Request Modal */}
         {verificationModal.isOpen && verificationModal.user && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
             className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto"
             onClick={() => setVerificationModal({ isOpen: false, user: null })}
           >
             <motion.div
-              initial={{ scale: 0.95, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] rounded-2xl shadow-2xl p-5 sm:p-6 max-w-4xl w-full my-8 text-[#0A0A0C] dark:text-[#F5F4F0]"
+              initial={{ scale: 0.96, y: 12, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
+              className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] rounded-2xl shadow-[var(--shadow-elevated)] p-5 sm:p-6 max-w-4xl w-full my-8 text-[#0A0A0C] dark:text-[#F5F4F0]"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-6">
@@ -2210,9 +2594,9 @@ const AdminDashboard: React.FC = () => {
                 </h2>
                 <motion.button
                   onClick={() => setVerificationModal({ isOpen: false, user: null })}
-                  className="text-[#5C5B57] dark:text-[#94938E] hover:text-[#E04F33]"
-                  whileHover={{ scale: 1.1 }}
-                  whileTap={{ scale: 0.9 }}
+                  className="text-[#5C5B57] dark:text-[#94938E] hover:text-[#E04F33] transition-colors duration-150"
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                 >
                   <XCircle size={24} />
                 </motion.button>
@@ -2339,18 +2723,18 @@ const AdminDashboard: React.FC = () => {
               </div>
 
               {/* Action Buttons */}
-              <div className="flex space-x-4 justify-end pt-4 border-t border-[#E5E2DC] dark:border-[#232329]">
+              <div className="flex space-x-4 justify-end pt-4 border-t border-[#E5E2DC]">
                 <motion.button
                   onClick={() => handleRejectProfile(verificationModal.user!.id)}
-                  className="px-6 py-2 bg-red-500/20 border-2 border-red-500/50 text-red-400 font-bold font-mono rounded-lg hover:bg-red-500/30 transition-all"
-                  whileHover={{ scale: 1.02, boxShadow: '0 0 15px rgba(239, 68, 68, 0.5)' }}
+                  className="px-6 py-2 bg-rose-50 border-2 border-rose-300 text-rose-700 font-bold font-mono rounded-lg hover:bg-rose-100 transition-[background-color,border-color,color,transform] duration-150"
+                  whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                 >
                   REJECT
                 </motion.button>
                 <motion.button
                   onClick={() => verifyUser(verificationModal.user!.id, true)}
-                  className="px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all"
+                  className="px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-[background-color,border-color,color,transform] duration-150"
                   whileHover={{ scale: 1.02, boxShadow: '0 0 15px rgba(34, 197, 94, 0.5)' }}
                   whileTap={{ scale: 0.98 }}
                 >
@@ -2367,13 +2751,15 @@ const AdminDashboard: React.FC = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
             className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             onClick={() => setEditPaperModal({ isOpen: false, paper: null })}
           >
             <motion.div
-              initial={{ scale: 0.95, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              className="bg-white/95 dark:bg-[#111117]/95 backdrop-blur-xl border border-[#E5E2DC] dark:border-[#232329] rounded-xl shadow-2xl p-6 max-w-2xl w-full"
+              initial={{ scale: 0.96, y: 12, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
+              className="bg-white/95 dark:bg-[#111117]/95 backdrop-blur-xl border border-[#E5E2DC] dark:border-[#232329] rounded-2xl shadow-[var(--shadow-elevated)] p-6 max-w-2xl w-full"
               onClick={(e) => e.stopPropagation()}
             >
               <h2 className="text-2xl font-bold mb-6 text-[#0A0A0C] dark:text-[#F5F4F0] font-mono">
@@ -2458,7 +2844,7 @@ const AdminDashboard: React.FC = () => {
                 <div className="flex space-x-2 justify-end pt-4 border-t border-[#E5E2DC] dark:border-[#232329]">
                   <motion.button
                     onClick={() => setEditPaperModal({ isOpen: false, paper: null })}
-                    className="px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-all"
+                    className="px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-[background-color,border-color,color,transform] duration-150"
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                   >
@@ -2466,7 +2852,7 @@ const AdminDashboard: React.FC = () => {
                   </motion.button>
                   <motion.button
                     onClick={() => editPaper(editPaperModal.paper!.id)}
-                    className="px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-all"
+                    className="px-6 py-2 bg-gradient-to-r from-[#896ABD] to-[#E04F33] text-white font-bold font-mono rounded-lg hover:shadow-lg hover:shadow-[#896ABD]/30 transition-[background-color,border-color,color,transform] duration-150"
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                   >
@@ -2485,31 +2871,33 @@ const AdminDashboard: React.FC = () => {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
+            transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
             onClick={() => setRejectionModal({ isOpen: false, paperId: 0, feedback: '' })}
           >
             <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
+              initial={{ scale: 0.96, y: 8, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] shadow-2xl rounded-xl p-6 max-w-md w-full mx-4"
+              className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] shadow-[var(--shadow-elevated)] rounded-2xl p-6 max-w-md w-full mx-4"
             >
-              <h3 className="text-xl font-bold text-red-400 mb-4 font-mono">REJECT PAPER</h3>
-              <label className="block text-sm font-mono text-red-400/70 mb-2 uppercase">
+              <h3 className="text-xl font-bold text-rose-700 mb-4 font-mono">REJECT PAPER</h3>
+              <label className="block text-sm font-mono text-rose-700 font-semibold mb-2 uppercase">
                 REJECTION FEEDBACK (REQUIRED)
               </label>
               <textarea
                 value={rejectionModal.feedback}
                 onChange={(e) => setRejectionModal({ ...rejectionModal, feedback: e.target.value })}
                 placeholder="Enter feedback for rejection (e.g., 'Incomplete information', 'File format not supported', etc.)"
-                className="w-full px-4 py-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border-2 border-red-500/30 rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/50 resize-none"
+                className="w-full px-4 py-3 bg-[#FAF9F6] border-2 border-rose-300 rounded-lg text-[#0A0A0C] font-mono focus:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-500/30 resize-none"
                 rows={5}
                 autoFocus
               />
               <div className="flex space-x-4 justify-end mt-4">
                 <motion.button
                   onClick={() => setRejectionModal({ isOpen: false, paperId: 0, feedback: '' })}
-                  className="px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-all"
+                  className="px-6 py-2 bg-[#FAF9F6] border-2 border-[#E5E2DC] text-[#5C5B57] font-mono rounded-lg hover:border-[#896ABD]/40 transition-[background-color,border-color,color,transform] duration-150"
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                 >
@@ -2517,7 +2905,7 @@ const AdminDashboard: React.FC = () => {
                 </motion.button>
                 <motion.button
                   onClick={submitRejection}
-                  className="px-6 py-2 bg-red-500/20 border-2 border-red-500/50 text-red-400 font-bold font-mono rounded-lg hover:bg-red-500/30 transition-all"
+                  className="px-6 py-2 bg-rose-50 border-2 border-rose-300 text-rose-700 font-bold font-mono rounded-lg hover:bg-rose-100 transition-[background-color,border-color,color,transform] duration-150"
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                 >
@@ -2535,31 +2923,33 @@ const AdminDashboard: React.FC = () => {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
+            transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
             onClick={() => setProfileRejectionModal({ isOpen: false, userId: 0, feedback: '' })}
           >
             <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
+              initial={{ scale: 0.96, y: 8, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white dark:bg-[#111117] border border-[#E5E2DC] dark:border-[#232329] text-[#0A0A0C] dark:text-[#F5F4F0] shadow-2xl rounded-xl p-6 max-w-md w-full mx-4"
+              className="bg-white border border-[#E5E2DC] text-[#0A0A0C] shadow-[var(--shadow-elevated)] rounded-2xl p-6 max-w-md w-full mx-4"
             >
-              <h3 className="text-xl font-bold text-red-400 mb-4 font-mono">REJECT PROFILE</h3>
-              <label className="block text-sm font-mono text-red-400/70 mb-2 uppercase">
+              <h3 className="text-xl font-bold text-rose-700 mb-4 font-mono">REJECT PROFILE</h3>
+              <label className="block text-sm font-mono text-rose-700 font-semibold mb-2 uppercase">
                 REJECTION FEEDBACK (REQUIRED)
               </label>
               <textarea
                 value={profileRejectionModal.feedback}
                 onChange={(e) => setProfileRejectionModal({ ...profileRejectionModal, feedback: e.target.value })}
                 placeholder="Enter feedback for rejection (e.g., 'ID card not clear', 'Missing information', etc.)"
-                className="w-full px-4 py-3 bg-[#FAF9F6] dark:bg-[#0A0A0C]/80 border-2 border-red-500/30 rounded-lg text-[#0A0A0C] dark:text-[#F5F4F0] font-mono focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/50 resize-none"
+                className="w-full px-4 py-3 bg-[#FAF9F6] border-2 border-rose-300 rounded-lg text-[#0A0A0C] font-mono focus:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-500/30 resize-none"
                 rows={5}
                 autoFocus
               />
               <div className="flex space-x-4 justify-end mt-4">
                 <motion.button
                   onClick={() => setProfileRejectionModal({ isOpen: false, userId: 0, feedback: '' })}
-                  className="px-6 py-2 bg-[#FAF9F6] dark:bg-[#18181F] border-2 border-[#E5E2DC] dark:border-[#232329] text-[#5C5B57] dark:text-[#94938E] font-mono rounded-lg hover:border-[#896ABD]/40 transition-all"
+                  className="px-6 py-2 bg-[#FAF9F6] border-2 border-[#E5E2DC] text-[#5C5B57] font-mono rounded-lg hover:border-[#896ABD]/40 transition-[background-color,border-color,color,transform] duration-150"
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                 >
@@ -2567,7 +2957,7 @@ const AdminDashboard: React.FC = () => {
                 </motion.button>
                 <motion.button
                   onClick={submitProfileRejection}
-                  className="px-6 py-2 bg-red-500/20 border-2 border-red-500/50 text-red-400 font-bold font-mono rounded-lg hover:bg-red-500/30 transition-all"
+                  className="px-6 py-2 bg-rose-50 border-2 border-rose-300 text-rose-700 font-bold font-mono rounded-lg hover:bg-rose-100 transition-[background-color,border-color,color,transform] duration-150"
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                 >
@@ -2578,6 +2968,58 @@ const AdminDashboard: React.FC = () => {
           </motion.div>
         )
       }
+
+      {/* Admin Reset User Password Modal */}
+      {resetPwdModal.isOpen && resetPwdModal.user && (
+        <div
+          className="modal-backdrop-enter fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+          onClick={() => setResetPwdModal({ isOpen: false, user: null })}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-panel-enter bg-white border border-[#E5E2DC] text-[#0A0A0C] shadow-[var(--shadow-elevated)] rounded-2xl p-6 max-w-md w-full space-y-4"
+          >
+            <div>
+              <h3 className="text-lg font-bold font-mono">RESET USER PASSWORD</h3>
+              <p className="text-xs text-[#5C5B57] mt-1 font-mono">
+                {resetPwdModal.user.name} ({resetPwdModal.user.email})
+              </p>
+            </div>
+            <form onSubmit={submitResetPassword} className="space-y-3">
+              <div>
+                <label className="block text-xs font-mono uppercase text-[#5C5B57] mb-1">
+                  New Password (min 8 characters) *
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  autoFocus
+                  value={resetPwdValue}
+                  onChange={(e) => setResetPwdValue(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-[#E5E2DC] bg-[#FAF9F6] text-sm"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setResetPwdModal({ isOpen: false, user: null })}
+                  className="px-4 py-2 rounded-lg border border-[#E5E2DC] text-xs font-mono font-semibold"
+                >
+                  CANCEL
+                </button>
+                <button
+                  type="submit"
+                  disabled={resettingPwd}
+                  className="px-4 py-2 rounded-lg bg-[#E04F33] text-white text-xs font-mono font-semibold disabled:opacity-50"
+                >
+                  {resettingPwd ? 'RESETTING...' : 'RESET PASSWORD'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* In-app Confirmation Modal */}
       <ConfirmDialogModal dialog={confirmDialog} onResolve={resolveConfirm} />

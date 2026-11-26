@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { ArrowUpRight, FileText, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { usePrefersReducedMotion } from '@/components/viz/chartTokens';
 
 interface HeroPaperDeckProps {
   heroImageSrc: string;
@@ -37,6 +38,7 @@ export const HeroPaperDeck: React.FC<HeroPaperDeckProps> = ({
   papersCount,
   onSelectCourse,
 }) => {
+  const reducedMotion = usePrefersReducedMotion();
   const [activeIndex, setActiveIndex] = useState(0);
 
   const mouseX = useMotionValue(0);
@@ -52,13 +54,15 @@ export const HeroPaperDeck: React.FC<HeroPaperDeckProps> = ({
   });
 
   useEffect(() => {
+    if (reducedMotion) return;
     const timer = setInterval(() => {
       setActiveIndex((prev) => (prev + 1) % SAMPLE_PAPERS.length);
     }, 3600);
     return () => clearInterval(timer);
-  }, []);
+  }, [reducedMotion]);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (reducedMotion) return;
     const rect = e.currentTarget.getBoundingClientRect();
     mouseX.set((e.clientX - rect.left) / rect.width - 0.5);
     mouseY.set((e.clientY - rect.top) / rect.height - 0.5);

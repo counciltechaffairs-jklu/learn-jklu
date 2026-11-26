@@ -1,6 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import anime from 'animejs';
+import { AnimatePresence, motion, type PanInfo } from 'framer-motion';
 import {
   Eye,
   Download,
@@ -19,6 +19,8 @@ import {
   Smartphone,
 } from 'lucide-react';
 import { YearDots } from '@/components/viz/YearDots';
+import { SPRING_FLUID, projectMomentum } from '@/components/animations/MotionPrimitives';
+import { usePrefersReducedMotion } from '@/components/viz/chartTokens';
 
 export interface PaperCardProps {
   paper: {
@@ -61,6 +63,23 @@ const PaperCard: React.FC<PaperCardProps> = ({
   const cardRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const reducedMotion = usePrefersReducedMotion();
+
+  useEffect(() => {
+    if (!shareOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShareOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [shareOpen]);
+
+  const handleShareDragEnd = (_e: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
+    const projected = info.offset.y + projectMomentum(info.velocity.y);
+    if (projected > 110) {
+      setShareOpen(false);
+    }
+  };
 
   const typeUpper = (paper.paper_type || 'ENDTERM').toUpperCase();
   const typeLabel =
@@ -110,14 +129,6 @@ const PaperCard: React.FC<PaperCardProps> = ({
   const handleOpenShare = (e: React.MouseEvent) => {
     e.stopPropagation();
     setShareOpen(true);
-    if (cardRef.current) {
-      anime({
-        targets: cardRef.current,
-        scale: [1, 1.015, 1],
-        duration: 320,
-        easing: 'easeOutQuad',
-      });
-    }
   };
 
   const handleCopyLink = async () => {
@@ -163,7 +174,7 @@ const PaperCard: React.FC<PaperCardProps> = ({
     <div
       ref={cardRef}
       onClick={() => onPreview(paper)}
-      className={`paper-card-anim relative overflow-hidden rounded-2xl p-6 sm:p-7 flex flex-col justify-between cursor-pointer group bg-white/90 dark:bg-[#111117]/90 backdrop-blur-sm border shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_12px_36px_rgb(0,0,0,0.35)] hover:shadow-[0_16px_44px_rgba(137,106,189,0.18)] hover:border-[#896ABD]/60 dark:hover:border-[#A855F7]/50 hover:-translate-y-1 transition-[transform,box-shadow,border-color] duration-200 min-h-[268px] transform-gpu ${
+      className={`paper-card-anim hover-lift dw-crosshair-card relative overflow-hidden rounded-2xl p-6 sm:p-7 flex flex-col justify-between cursor-pointer group bg-white dark:bg-[#111117] border shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_12px_36px_rgb(0,0,0,0.35)] hover:border-[#896ABD]/60 dark:hover:border-[#A855F7]/50 transition-[transform,border-color] duration-200 min-h-[268px] transform-gpu ${
         isSelected
           ? 'border-[#896ABD] ring-2 ring-[#896ABD]/40 dark:border-[#A855F7] dark:ring-[#A855F7]/40'
           : 'border-[#E5E2DC]/90 dark:border-white/10'
@@ -287,7 +298,7 @@ const PaperCard: React.FC<PaperCardProps> = ({
         <button
           onClick={() => onPreview(paper)}
           title="Instant PDF Preview"
-          className="flex-1 h-11 px-3 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6]/80 dark:bg-white/[0.05] hover:border-[#896ABD] dark:hover:border-[#A855F7] hover:bg-white dark:hover:bg-white/10 text-[#0A0A0C] dark:text-[#F5F4F0] text-xs sm:text-sm font-medium inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-all active:scale-95"
+          className="flex-1 h-11 px-3 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6]/80 dark:bg-white/[0.05] hover:border-[#896ABD] dark:hover:border-[#A855F7] hover:bg-white dark:hover:bg-white/10 text-[#0A0A0C] dark:text-[#F5F4F0] text-xs sm:text-sm font-medium inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-[background-color,border-color,color,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97]"
         >
           <Eye className="w-4 h-4 text-[#896ABD] dark:text-[#C084FC] shrink-0" />
           <span>Preview</span>
@@ -296,7 +307,7 @@ const PaperCard: React.FC<PaperCardProps> = ({
         <button
           onClick={() => onDownload(paper)}
           title="Download Official Question Paper PDF"
-          className="flex-1 h-11 px-3 rounded-xl bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] hover:bg-[#E04F33] dark:hover:bg-[#A855F7] dark:hover:text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shadow-sm transition-all active:scale-95"
+          className="flex-1 h-11 px-3 rounded-xl bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] hover:bg-[#E04F33] dark:hover:bg-[#A855F7] dark:hover:text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shadow-sm transition-[background-color,color,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97]"
         >
           <Download className="w-4 h-4 shrink-0" />
           <span>Download PDF</span>
@@ -305,7 +316,7 @@ const PaperCard: React.FC<PaperCardProps> = ({
         <button
           onClick={handleOpenShare}
           title="Share Question Paper"
-          className="w-11 h-11 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6]/80 dark:bg-white/[0.05] hover:border-[#896ABD] dark:hover:border-[#A855F7] text-[#5C5B57] dark:text-[#C4C3BE] inline-flex items-center justify-center transition-all active:scale-95 shrink-0"
+          className="w-11 h-11 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-[#FAF9F6]/80 dark:bg-white/[0.05] hover:border-[#896ABD] dark:hover:border-[#A855F7] text-[#5C5B57] dark:text-[#C4C3BE] inline-flex items-center justify-center transition-[background-color,border-color,color,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97] shrink-0"
         >
           {copied ? (
             <Check className="w-4 h-4 text-emerald-500" />
@@ -315,18 +326,39 @@ const PaperCard: React.FC<PaperCardProps> = ({
         </button>
       </div>
 
-      {/* Share Popup Modal (Apps + Copy Link) */}
-      {shareOpen &&
-        typeof document !== 'undefined' &&
+      {/* Share Popup Modal (Apps + Copy Link, Apple Drag-to-Dismiss Sheet on Mobile) */}
+      {typeof document !== 'undefined' &&
         createPortal(
-          <div
-            className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
-            onClick={() => setShareOpen(false)}
-          >
-            <div
-              className="w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl bg-white dark:bg-[#14141B] border border-[#E5E2DC] dark:border-white/10 shadow-2xl p-5 sm:p-6 space-y-5"
-              onClick={(e) => e.stopPropagation()}
-            >
+          <AnimatePresence>
+            {shareOpen && (
+              <motion.div
+                initial={reducedMotion ? undefined : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={reducedMotion ? undefined : { opacity: 0 }}
+                transition={{ duration: 0.16 }}
+                className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+                onClick={() => setShareOpen(false)}
+              >
+                <motion.div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={`Share ${shareTitle}`}
+                  initial={reducedMotion ? undefined : { opacity: 0, y: 24, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={reducedMotion ? undefined : { opacity: 0, y: 20, scale: 0.97 }}
+                  transition={SPRING_FLUID}
+                  drag={reducedMotion ? false : 'y'}
+                  dragConstraints={{ top: 0, bottom: 0 }}
+                  dragElastic={{ top: 0.08, bottom: 0.55 }}
+                  onDragEnd={handleShareDragEnd}
+                  className="w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl bg-white dark:bg-[#14141B] border border-[#E5E2DC] dark:border-white/10 shadow-[var(--shadow-elevated)] p-5 sm:p-6 space-y-5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Mobile Grab Handle Indicator */}
+                  <div
+                    aria-hidden="true"
+                    className="sm:hidden w-10 h-1 rounded-full bg-black/15 dark:bg-white/20 mx-auto -mt-1.5 mb-1"
+                  />
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <span className="text-[11px] font-mono-tabular uppercase tracking-wider text-[#896ABD] dark:text-[#C084FC] font-semibold">
@@ -415,8 +447,10 @@ const PaperCard: React.FC<PaperCardProps> = ({
                   <span>{copied ? 'Copied!' : 'Copy'}</span>
                 </button>
               </div>
-            </div>
-          </div>,
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>,
           document.body
         )}
     </div>

@@ -1,6 +1,11 @@
 import type { AppProps } from 'next/app';
 import Head from 'next/head';
 import '@/styles/globals.css';
+import '@/styles/stageshow/stage.css';
+import '@/styles/stageshow/cursor.css';
+import '@/styles/stageshow/keys.css';
+import '@/styles/stageshow/window.css';
+import '@/styles/stageshow/student-demo.css';
 
 export default function MyApp({ Component, pageProps }: AppProps) {
   return (

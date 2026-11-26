@@ -12,6 +12,7 @@ const { Pool } = pg;
 
 export const prisma = null;
 let dbAdapter = null;
+let dbInitPromise = null;
 
 export function isExternalPostgresUrl(url) {
   return /^postgres(?:ql)?:\/\//i.test(String(url || '').trim());
@@ -19,96 +20,125 @@ export function isExternalPostgresUrl(url) {
 
 export async function getDb() {
   if (dbAdapter) return dbAdapter;
+  if (dbInitPromise) return dbInitPromise;
 
-  const databaseUrl = String(process.env.DATABASE_URL || '').trim();
-  if (isExternalPostgresUrl(databaseUrl)) {
-    const pool = new Pool({
-      connectionString: databaseUrl,
-      max: Number(process.env.PG_POOL_MAX || 20),
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
-    });
-    await pool.query('SELECT 1');
+  dbInitPromise = (async () => {
+    const databaseUrl = String(process.env.DATABASE_URL || '').trim();
+    if (isExternalPostgresUrl(databaseUrl)) {
+      const isSupabase = /supabase\.(co|com)/i.test(databaseUrl);
+      const needsSsl =
+        isSupabase || /sslmode=require/i.test(databaseUrl) || process.env.PG_SSL === 'true';
+      const rejectUnauthorized = process.env.PG_SSL_REJECT_UNAUTHORIZED === 'true';
+      let poolConnectionString = databaseUrl;
+      if (needsSsl && !rejectUnauthorized) {
+        try {
+          const parsed = new URL(databaseUrl);
+          parsed.searchParams.delete('sslmode');
+          parsed.searchParams.delete('uselibpqcompat');
+          poolConnectionString = parsed.toString();
+        } catch {}
+      }
+      const pool = new Pool({
+        connectionString: poolConnectionString,
+        max: Number(process.env.PG_POOL_MAX || (isSupabase ? 10 : 20)),
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
+        ...(needsSsl ? { ssl: { rejectUnauthorized } } : {}),
+      });
+      pool.on('error', (err) => {
+        console.error('⚠️ [PostgreSQL Pool] Unexpected idle client error:', err?.message || err);
+      });
+      await pool.query('SELECT 1');
+
+      dbAdapter = {
+        engineName: isSupabase
+          ? 'PostgreSQL (Supabase pg.Pool)'
+          : 'PostgreSQL (pg.Pool External Connection)',
+        isExternalPg: true,
+        prisma: null,
+        async query(sql, params = []) {
+          const res = await pool.query(sql, params);
+          return { rows: res.rows, rowCount: res.rowCount ?? res.rows.length };
+        },
+        async exec(sql) {
+          await pool.query(sql);
+        },
+        async withTransaction(fn) {
+          const client = await pool.connect();
+          try {
+            await client.query('BEGIN');
+            const txAdapter = {
+              async query(sql, params = []) {
+                const res = await client.query(sql, params);
+                return { rows: res.rows, rowCount: res.rowCount ?? res.rows.length };
+              },
+              async exec(sql) {
+                await client.query(sql);
+              },
+            };
+            const result = await fn(txAdapter);
+            await client.query('COMMIT');
+            return result;
+          } catch (err) {
+            try {
+              await client.query('ROLLBACK');
+            } catch {}
+            throw err;
+          } finally {
+            client.release();
+          }
+        },
+        async close() {
+          await pool.end();
+        },
+      };
+      return dbAdapter;
+    }
+
+    const dataDir = path.resolve(process.cwd(), './data/pgdata_v2');
+    fs.mkdirSync(path.dirname(dataDir), { recursive: true });
+    const pglite = new PGlite(dataDir);
+    await pglite.waitReady;
 
     dbAdapter = {
-      engineName: 'PostgreSQL (pg.Pool External Connection)',
-      isExternalPg: true,
+      engineName: 'PostgreSQL 16 (Local Embedded SQL — Learn JKLU 2.0 Offline Sandbox)',
+      isExternalPg: false,
       prisma: null,
       async query(sql, params = []) {
-        const res = await pool.query(sql, params);
-        return { rows: res.rows, rowCount: res.rowCount ?? res.rows.length };
+        const res = await pglite.query(sql, params);
+        return { rows: res.rows, rowCount: res.rows.length || res.affectedRows || 0 };
       },
       async exec(sql) {
-        await pool.query(sql);
+        await pglite.exec(sql);
       },
       async withTransaction(fn) {
-        const client = await pool.connect();
-        try {
-          await client.query('BEGIN');
+        return pglite.transaction(async (tx) => {
           const txAdapter = {
             async query(sql, params = []) {
-              const res = await client.query(sql, params);
-              return { rows: res.rows, rowCount: res.rowCount ?? res.rows.length };
+              const res = await tx.query(sql, params);
+              return { rows: res.rows, rowCount: res.rows.length || res.affectedRows || 0 };
             },
             async exec(sql) {
-              await client.query(sql);
+              await tx.exec(sql);
             },
           };
-          const result = await fn(txAdapter);
-          await client.query('COMMIT');
-          return result;
-        } catch (err) {
-          try {
-            await client.query('ROLLBACK');
-          } catch {}
-          throw err;
-        } finally {
-          client.release();
-        }
+          return fn(txAdapter);
+        });
       },
       async close() {
-        await pool.end();
+        await pglite.close();
       },
     };
+
     return dbAdapter;
+  })();
+
+  try {
+    return await dbInitPromise;
+  } catch (err) {
+    dbInitPromise = null;
+    throw err;
   }
-
-  const dataDir = path.resolve(process.cwd(), './data/pgdata_v2');
-  fs.mkdirSync(path.dirname(dataDir), { recursive: true });
-  const pglite = new PGlite(dataDir);
-  await pglite.waitReady;
-
-  dbAdapter = {
-    engineName: 'PostgreSQL 16 (Local Embedded SQL — Learn JKLU 2.0 Offline Sandbox)',
-    isExternalPg: false,
-    prisma: null,
-    async query(sql, params = []) {
-      const res = await pglite.query(sql, params);
-      return { rows: res.rows, rowCount: res.rows.length || res.affectedRows || 0 };
-    },
-    async exec(sql) {
-      await pglite.exec(sql);
-    },
-    async withTransaction(fn) {
-      return pglite.transaction(async (tx) => {
-        const txAdapter = {
-          async query(sql, params = []) {
-            const res = await tx.query(sql, params);
-            return { rows: res.rows, rowCount: res.rows.length || res.affectedRows || 0 };
-          },
-          async exec(sql) {
-            await tx.exec(sql);
-          },
-        };
-        return fn(txAdapter);
-      });
-    },
-    async close() {
-      await pglite.close();
-    },
-  };
-
-  return dbAdapter;
 }
 
 export async function withTransaction(dbOrFn, maybeFn) {
@@ -131,6 +161,7 @@ export async function withTransaction(dbOrFn, maybeFn) {
 }
 
 export async function closeDb() {
+  dbInitPromise = null;
   if (dbAdapter && typeof dbAdapter.close === 'function') {
     await dbAdapter.close();
     dbAdapter = null;
@@ -154,11 +185,339 @@ export async function initDatabaseAndSeed() {
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE assignment_submissions
+      ALTER COLUMN submission_url DROP NOT NULL;
+    ALTER TABLE assignment_submissions
       ADD COLUMN IF NOT EXISTS file_sha256 TEXT,
-      ADD COLUMN IF NOT EXISTS drive_modified_time TIMESTAMPTZ;
+      ADD COLUMN IF NOT EXISTS drive_modified_time TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS file_mime TEXT,
+      ADD COLUMN IF NOT EXISTS file_data BYTEA,
+      ADD COLUMN IF NOT EXISTS file_size INTEGER,
+      ADD COLUMN IF NOT EXISTS rubric_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS group_id INTEGER,
+      ADD COLUMN IF NOT EXISTS late_minutes INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS late_penalty_applied NUMERIC(6,2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS version_count INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE course_enrollments ALTER COLUMN attendance_pct DROP DEFAULT;
+    ALTER TABLE course_offerings
+      ADD COLUMN IF NOT EXISTS banner_image_url TEXT,
+      ADD COLUMN IF NOT EXISTS course_desc_pdf_name TEXT,
+      ADD COLUMN IF NOT EXISTS course_desc_pdf_data BYTEA,
+      ADD COLUMN IF NOT EXISTS course_desc_pdf_size INTEGER,
+      ADD COLUMN IF NOT EXISTS course_desc_pdf_uploaded_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS sections JSONB NOT NULL DEFAULT '["Sec A"]'::jsonb,
+      ADD COLUMN IF NOT EXISTS reeval_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS grade_weights JSONB NOT NULL DEFAULT '{"ASSIGNMENT":30,"LAB":20,"QUIZ":20,"PROJECT":30}'::jsonb,
+      ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE course_instructors
+      ADD COLUMN IF NOT EXISTS assigned_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb;
+    ALTER TABLE course_tas
+      ADD COLUMN IF NOT EXISTS assigned_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb;
+    ALTER TABLE classroom_announcements
+      ADD COLUMN IF NOT EXISTS target_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
+      ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS email_dispatched_at TIMESTAMPTZ;
+    ALTER TABLE classroom_assignments
+      ADD COLUMN IF NOT EXISTS target_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
+      ADD COLUMN IF NOT EXISTS grades_published BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS reeval_enabled BOOLEAN,
+      ADD COLUMN IF NOT EXISTS rubric_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS late_penalty_pct_per_day NUMERIC(5,2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS grace_minutes INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS is_group_assignment BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS max_group_size INTEGER NOT NULL DEFAULT 4,
+      ADD COLUMN IF NOT EXISTS weight_category TEXT NOT NULL DEFAULT 'ASSIGNMENT';
+    ALTER TABLE professor_profiles
+      ADD COLUMN IF NOT EXISTS card_style TEXT NOT NULL DEFAULT 'constellation';
     UPDATE users SET admin_role = NULL WHERE admin_role = 'ta';
-    UPDATE course_enrollments SET attendance_pct = NULL WHERE enroll_source = 'AUTO_BATCH';
+
+    CREATE TABLE IF NOT EXISTS submission_versions (
+      id SERIAL PRIMARY KEY,
+      submission_id INTEGER NOT NULL REFERENCES assignment_submissions(id) ON DELETE CASCADE,
+      version_no INTEGER NOT NULL DEFAULT 1,
+      submission_url TEXT,
+      submission_notes TEXT,
+      file_name TEXT,
+      file_mime TEXT,
+      file_size INTEGER,
+      submitted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS assignment_groups (
+      id SERIAL PRIMARY KEY,
+      assignment_id INTEGER NOT NULL REFERENCES classroom_assignments(id) ON DELETE CASCADE,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      is_locked BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS assignment_group_members (
+      id SERIAL PRIMARY KEY,
+      group_id INTEGER NOT NULL REFERENCES assignment_groups(id) ON DELETE CASCADE,
+      assignment_id INTEGER NOT NULL REFERENCES classroom_assignments(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      student_email TEXT,
+      student_name TEXT,
+      role TEXT NOT NULL DEFAULT 'member',
+      joined_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (assignment_id, student_id)
+    );
+    CREATE TABLE IF NOT EXISTS reeval_requests (
+      id SERIAL PRIMARY KEY,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      assignment_id INTEGER NOT NULL REFERENCES classroom_assignments(id) ON DELETE CASCADE,
+      submission_id INTEGER NOT NULL REFERENCES assignment_submissions(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      reviewer_name TEXT,
+      reviewer_note TEXT,
+      old_marks NUMERIC(6,2),
+      new_marks NUMERIC(6,2),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      reviewed_at TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS classroom_notifications (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      offering_id INTEGER REFERENCES course_offerings(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT,
+      link_path TEXT,
+      is_read BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS email_notification_logs (
+      id SERIAL PRIMARY KEY,
+      offering_id INTEGER REFERENCES course_offerings(id) ON DELETE SET NULL,
+      event_type TEXT NOT NULL,
+      recipient_email TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      status TEXT NOT NULL,
+      provider_id TEXT,
+      error_detail TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS submission_messages (
+      id SERIAL PRIMARY KEY,
+      submission_id INTEGER NOT NULL REFERENCES assignment_submissions(id) ON DELETE CASCADE,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      sender_name TEXT NOT NULL,
+      sender_role TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS announcement_reads (
+      announcement_id INTEGER NOT NULL REFERENCES classroom_announcements(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      read_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (announcement_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS classroom_polls (
+      id SERIAL PRIMARY KEY,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      author_name TEXT NOT NULL,
+      question TEXT NOT NULL,
+      options_json JSONB NOT NULL,
+      target_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
+      is_closed BOOLEAN NOT NULL DEFAULT FALSE,
+      closes_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS classroom_poll_votes (
+      poll_id INTEGER NOT NULL REFERENCES classroom_polls(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      option_index INTEGER NOT NULL,
+      voted_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (poll_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS office_hour_slots (
+      id SERIAL PRIMARY KEY,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      professor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      professor_name TEXT NOT NULL,
+      location TEXT,
+      starts_at TIMESTAMPTZ NOT NULL,
+      ends_at TIMESTAMPTZ NOT NULL,
+      max_bookings INTEGER NOT NULL DEFAULT 1,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS office_hour_bookings (
+      id SERIAL PRIMARY KEY,
+      slot_id INTEGER NOT NULL REFERENCES office_hour_slots(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      student_name TEXT,
+      student_email TEXT,
+      topic TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (slot_id, student_id)
+    );
+    CREATE TABLE IF NOT EXISTS course_modules (
+      id SERIAL PRIMARY KEY,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      target_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
+      unlock_at TIMESTAMPTZ,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS course_module_items (
+      id SERIAL PRIMARY KEY,
+      module_id INTEGER NOT NULL REFERENCES course_modules(id) ON DELETE CASCADE,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      item_type TEXT NOT NULL DEFAULT 'LINK',
+      resource_url TEXT,
+      file_name TEXT,
+      file_mime TEXT,
+      file_data BYTEA,
+      file_size INTEGER,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS module_item_progress (
+      item_id INTEGER NOT NULL REFERENCES course_module_items(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      bookmarked BOOLEAN NOT NULL DEFAULT FALSE,
+      completed BOOLEAN NOT NULL DEFAULT FALSE,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (item_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS attendance_sessions (
+      id SERIAL PRIMARY KEY,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      section TEXT NOT NULL DEFAULT 'Sec A',
+      session_date DATE NOT NULL,
+      topic TEXT,
+      checkin_pin TEXT,
+      pin_expires_at TIMESTAMPTZ,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS attendance_records (
+      session_id INTEGER NOT NULL REFERENCES attendance_sessions(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      enrollment_id INTEGER REFERENCES course_enrollments(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'PRESENT',
+      marked_via TEXT NOT NULL DEFAULT 'FACULTY',
+      marked_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (session_id, student_id)
+    );
+    CREATE TABLE IF NOT EXISTS od_leave_requests (
+      id SERIAL PRIMARY KEY,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      student_name TEXT,
+      student_email TEXT,
+      section TEXT,
+      leave_type TEXT NOT NULL DEFAULT 'OD',
+      from_date DATE NOT NULL,
+      to_date DATE NOT NULL,
+      reason TEXT NOT NULL,
+      proof_url TEXT,
+      proof_file_name TEXT,
+      proof_file_mime TEXT,
+      proof_file_data BYTEA,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      reviewer_note TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      reviewed_at TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS classroom_requests (
+      id SERIAL PRIMARY KEY,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      student_name TEXT,
+      student_email TEXT,
+      request_type TEXT NOT NULL,
+      current_section TEXT,
+      requested_section TEXT,
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      reviewer_note TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      reviewed_at TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS question_bank_items (
+      id SERIAL PRIMARY KEY,
+      owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      course_code TEXT,
+      topic TEXT,
+      question_type TEXT NOT NULL DEFAULT 'MCQ',
+      prompt TEXT NOT NULL,
+      options_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      correct_answers JSONB NOT NULL DEFAULT '[]'::jsonb,
+      marks NUMERIC(6,2) NOT NULL DEFAULT 1,
+      explanation TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS classroom_quizzes (
+      id SERIAL PRIMARY KEY,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      assignment_id INTEGER REFERENCES classroom_assignments(id) ON DELETE SET NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      target_sections JSONB NOT NULL DEFAULT '["ALL"]'::jsonb,
+      duration_minutes INTEGER NOT NULL DEFAULT 15,
+      randomize_questions BOOLEAN NOT NULL DEFAULT TRUE,
+      randomize_options BOOLEAN NOT NULL DEFAULT TRUE,
+      show_solutions_after BOOLEAN NOT NULL DEFAULT TRUE,
+      questions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      max_marks NUMERIC(6,2) NOT NULL DEFAULT 10,
+      starts_at TIMESTAMPTZ,
+      ends_at TIMESTAMPTZ,
+      is_published BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS classroom_quiz_attempts (
+      id SERIAL PRIMARY KEY,
+      quiz_id INTEGER NOT NULL REFERENCES classroom_quizzes(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      started_at TIMESTAMPTZ DEFAULT NOW(),
+      submitted_at TIMESTAMPTZ,
+      answers_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      score NUMERIC(6,2),
+      max_marks NUMERIC(6,2),
+      status TEXT NOT NULL DEFAULT 'IN_PROGRESS',
+      UNIQUE (quiz_id, student_id)
+    );
+    CREATE TABLE IF NOT EXISTS grading_audit_logs (
+      id SERIAL PRIMARY KEY,
+      offering_id INTEGER NOT NULL REFERENCES course_offerings(id) ON DELETE CASCADE,
+      assignment_id INTEGER REFERENCES classroom_assignments(id) ON DELETE SET NULL,
+      submission_id INTEGER REFERENCES assignment_submissions(id) ON DELETE SET NULL,
+      student_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      grader_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      grader_name TEXT,
+      grader_role TEXT,
+      old_marks NUMERIC(6,2),
+      new_marks NUMERIC(6,2),
+      source TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_classroom_assignments_offering_due ON classroom_assignments(offering_id, due_at);
+    CREATE INDEX IF NOT EXISTS idx_assignment_submissions_asgn_student ON assignment_submissions(assignment_id, student_id);
+    CREATE INDEX IF NOT EXISTS idx_papers_course_status ON papers(course_id, UPPER(status));
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_action_created ON audit_logs(UPPER(action), created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_course_enrollments_offering_student ON course_enrollments(offering_id, student_id);
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON classroom_notifications(user_id, is_read, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_reeval_offering_status ON reeval_requests(offering_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_group_members_group ON assignment_group_members(group_id);
+    CREATE INDEX IF NOT EXISTS idx_attendance_sessions_offering_sec ON attendance_sessions(offering_id, section, session_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_classroom_requests_offering_status ON classroom_requests(offering_id, status);
+    CREATE INDEX IF NOT EXISTS idx_grading_audit_offering ON grading_audit_logs(offering_id, created_at DESC);
   `);
 
   // 2. Ensure core Admin account exists in SQL DB without overwriting existing credentials
@@ -189,7 +548,10 @@ export async function initDatabaseAndSeed() {
   const existingCourses = Number(courseCountRes.rows[0]?.cnt || 0);
   if (existingCourses < 10) {
     const { courses } = getLocalPastpaperCatalog();
+    const dedupedMap = new Map();
     for (const c of courses) {
+      const code = String(c.code || '').trim();
+      if (!code) continue;
       const school =
         c.department === 'BBA' || c.department === 'MBA'
           ? 'IM'
@@ -198,26 +560,48 @@ export async function initDatabaseAndSeed() {
             : c.department === 'PHD'
               ? 'PHD'
               : 'IET';
+      dedupedMap.set(code, {
+        code,
+        name: String(c.name || code),
+        department: String(c.department || 'B.TECH'),
+        school,
+        semester: String(c.semester || '1'),
+        paper_count: Number(c.paper_count || 0),
+        description: String(c.description || `${c.department || 'JKLU'} Course`),
+      });
+    }
+    const uniqueCourses = Array.from(dedupedMap.values());
+    const CHUNK_SIZE = 200;
+    for (let i = 0; i < uniqueCourses.length; i += CHUNK_SIZE) {
+      const batch = uniqueCourses.slice(i, i + CHUNK_SIZE);
       await db.query(
         `INSERT INTO courses (code, name, department, school, semester, paper_count, description)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         SELECT * FROM UNNEST(
+           $1::text[],
+           $2::text[],
+           $3::text[],
+           $4::text[],
+           $5::text[],
+           $6::int[],
+           $7::text[]
+         )
          ON CONFLICT (code) DO UPDATE SET
            name = EXCLUDED.name,
            department = EXCLUDED.department,
            school = EXCLUDED.school,
            paper_count = EXCLUDED.paper_count`,
         [
-          c.code,
-          c.name,
-          c.department || 'B.TECH',
-          school,
-          String(c.semester || '1'),
-          Number(c.paper_count || 0),
-          c.description || `${c.department} Course`,
+          batch.map((r) => r.code),
+          batch.map((r) => r.name),
+          batch.map((r) => r.department),
+          batch.map((r) => r.school),
+          batch.map((r) => r.semester),
+          batch.map((r) => r.paper_count),
+          batch.map((r) => r.description),
         ]
       );
     }
-    console.log(`📚 [Local SQL] Seeded ${courses.length} JKLU courses into local database.`);
+    console.log(`📚 [Local SQL] Seeded ${uniqueCourses.length} JKLU courses into SQL database.`);
   }
 
   // 4. Seed Learn JKLU 2.0 Professors, TAs, Students, M:N Course Offerings, Classroom & TCS iON sample data (non-production only)

@@ -4,10 +4,10 @@ import anime from 'animejs';
 import { Mail, Lock, Eye, EyeOff, ArrowLeft } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
-import ThemeSwitcher from '@/components/layout/ThemeSwitcher';
 import JKLULogo from '@/components/layout/JKLULogo';
 import RobotCheck, { type CaptchaPayload } from '@/components/auth/RobotCheck';
 import CrystalizedBall from '@/components/layout/CrystalizedBall';
+import { DimensionalCornerMarks } from '@/components/dimensional/DimensionalKit';
 import { getPostLoginDestination, sanitizeNextPath } from '@/utils/postLoginRedirect';
 
 const Login: React.FC = () => {
@@ -26,11 +26,20 @@ const Login: React.FC = () => {
   const nextParam = sanitizeNextPath(searchParams.get('next'));
 
   useEffect(() => {
+    const prefersReduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (prefersReduced) {
+      document.querySelectorAll('.auth-editorial-panel').forEach((el) => {
+        (el as HTMLElement).style.opacity = '1';
+      });
+      return;
+    }
     anime({
       targets: '.auth-editorial-panel',
-      translateY: [20, 0],
+      translateY: [12, 0],
       opacity: [0, 1],
-      duration: 600,
+      duration: 360,
       easing: 'easeOutExpo',
     });
   }, []);
@@ -96,12 +105,16 @@ const Login: React.FC = () => {
             <span>Back to Home</span>
           </button>
         </div>
-        <ThemeSwitcher />
       </div>
 
-      <div className="relative z-10 auth-editorial-panel max-w-md w-full mx-auto backdrop-blur-md bg-white/90 dark:bg-[#111117]/85 border border-[#E5E2DC] dark:border-[#232329] shadow-xl rounded-lg p-5 sm:p-8 space-y-6">
+      <div className="relative z-10 auth-editorial-panel max-w-md w-full mx-auto backdrop-blur-md bg-white/95 dark:bg-[#111117]/90 border border-[#E5E2DC] dark:border-[#232329] shadow-[var(--shadow-elevated)] rounded-2xl p-5 sm:p-8 space-y-6">
+        <DimensionalCornerMarks />
+        <div className="flex items-center justify-between text-[9.5px] font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#8E8D88] border-b border-[#E5E2DC]/80 dark:border-white/10 pb-2">
+          <span>DWG NO. JKLU-AUTH-01</span>
+          <span>REV 2.0 · SCALE 1:1</span>
+        </div>
         <div className="space-y-2">
-          <span className="font-mono-tabular text-[11px] uppercase tracking-wider text-[#E04F33]">
+          <span className="block font-mono-tabular text-[10px] sm:text-[11px] uppercase tracking-wide sm:tracking-wider text-[#E04F33] leading-relaxed">
             JK LAKSHMIPAT UNIVERSITY · STUDENT · FACULTY · TA
           </span>
           <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
@@ -171,7 +184,7 @@ const Login: React.FC = () => {
           </button>
         </form>
 
-        <div className="pt-4 border-t border-[#E5E2DC] dark:border-[#232329]">
+        <div className="pt-4 border-t border-[#E5E2DC] dark:border-[#232329] space-y-2">
           <p className="text-center text-xs text-[#5C5B57] dark:text-[#94938E]">
             New student?{' '}
             <Link
@@ -181,6 +194,9 @@ const Login: React.FC = () => {
               Create an account
             </Link>
           </p>
+          <div className="text-center font-mono-tabular text-[9.5px] uppercase tracking-wider text-[#5C5B57] dark:text-[#8E8D88]">
+            SCALE 1:1 · @JKLU.EDU.IN
+          </div>
         </div>
       </div>
 

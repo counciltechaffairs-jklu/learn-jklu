@@ -5,12 +5,22 @@ import { hashPasswordNonBlocking } from '../config/cryptoPool.js';
 import {
   requireProfessorOrAdmin,
   requireFullAdmin,
+  isFullAdminUser,
+  getAuthenticatedUser,
 } from '../middleware/auth.js';
 import { profileWriteLimiter } from '../middleware/rateLimiters.js';
 import { createAsyncRouter } from '../utils/routerHelper.js';
 import { validateHttpsUrl, writeAuditLog } from '../utils/security.js';
 
 const router = createAsyncRouter();
+
+const ALLOWED_CARD_STYLES = new Set([
+  'constellation',
+  'mesh',
+  'prism',
+  'halo',
+  'minimal',
+]);
 
 /**
  * Helper: Fetch public M:N courses & public TAs mapped by professor user_id
@@ -36,6 +46,7 @@ async function loadPublicFacultyDirectory() {
        pp.specialization,
        pp.bio,
        pp.google_scholar_url,
+       pp.card_style,
        pp.updated_at
      FROM professor_profiles pp
      JOIN users u ON u.id = pp.user_id
@@ -182,6 +193,7 @@ async function loadPublicFacultyDirectory() {
       specialization: p.specialization || null,
       bio: p.bio || null,
       google_scholar_url: p.google_scholar_url || null,
+      card_style: ALLOWED_CARD_STYLES.has(String(p.card_style || '')) ? p.card_style : 'constellation',
       course_count: courses.length,
       courses,
       // Explicitly omit private_faculty_notes, password_hash, tcs_ion_faculty_id, admin_feedback
@@ -239,7 +251,10 @@ router.get('/faculty/directory', async (req, res) => {
  */
 router.get('/faculty/course/:course_code', async (req, res) => {
   const code = String(req.params.course_code || '').trim().toUpperCase();
-  const allFaculty = await getOrSetCache('faculty:directory:v2', 60 * 1000, loadPublicFacultyDirectory);
+  const [user, allFaculty] = await Promise.all([
+    getAuthenticatedUser(req),
+    getOrSetCache('faculty:directory:v2', 60 * 1000, loadPublicFacultyDirectory),
+  ]);
 
   const instructors = [];
   let offeringMeta = null;
@@ -258,6 +273,7 @@ router.get('/faculty/course/:course_code', async (req, res) => {
             batch_year: c.batch_year,
             semester: c.semester,
             is_released: c.is_released,
+            can_open_classroom: false,
           };
           tas = c.tas || [];
         }
@@ -276,6 +292,26 @@ router.get('/faculty/course/:course_code', async (req, res) => {
     }
   }
 
+  if (offeringMeta && user) {
+    const offeringId = Number(offeringMeta.offering_id);
+    if (isFullAdminUser(user)) {
+      offeringMeta.can_open_classroom = true;
+    } else {
+      const db = await getDb();
+      const isVerifiedAccount = Boolean(user.email_verified && user.id_verified);
+      const accessRes = await db.query(
+        `SELECT (
+           EXISTS (SELECT 1 FROM course_instructors WHERE offering_id = $1 AND professor_id = $2)
+           OR EXISTS (SELECT 1 FROM course_tas WHERE offering_id = $1 AND (user_id = $2 OR ($4::boolean = TRUE AND LOWER(public_email) = LOWER($3))))
+           OR EXISTS (SELECT 1 FROM course_enrollments WHERE offering_id = $1 AND (student_id = $2 OR LOWER(student_email) = LOWER($3)))
+         ) AS can_open`,
+        [offeringId, user.id, user.email, isVerifiedAccount]
+      );
+      offeringMeta.can_open_classroom = Boolean(accessRes.rows[0]?.can_open);
+    }
+    res.setHeader('Cache-Control', 'private, no-store');
+  }
+
   res.json({
     course_code: code,
     offering: offeringMeta,
@@ -290,11 +326,17 @@ router.get('/faculty/course/:course_code', async (req, res) => {
  */
 router.get('/faculty/me/profile', requireProfessorOrAdmin, async (req, res) => {
   const db = await getDb();
+  const isAdminActor = isFullAdminUser(req.user);
   const targetUserId =
-    req.user.is_admin && req.query.user_id ? Number(req.query.user_id) : Number(req.user.id);
+    isAdminActor && req.query.user_id ? Number(req.query.user_id) : Number(req.user.id);
+
+  if (!Number.isFinite(targetUserId) || targetUserId <= 0) {
+    res.status(400).json({ detail: 'Invalid target user ID' });
+    return;
+  }
 
   const pRes = await db.query(
-    `SELECT pp.*, u.name, u.email, u.department
+    `SELECT pp.*, u.name, u.email, u.department, u.photo_path
      FROM professor_profiles pp
      JOIN users u ON u.id = pp.user_id
      WHERE pp.user_id = $1 LIMIT 1`,
@@ -302,10 +344,20 @@ router.get('/faculty/me/profile', requireProfessorOrAdmin, async (req, res) => {
   );
 
   if (pRes.rowCount === 0) {
+    const uRes = await db.query(
+      'SELECT id, name, email, photo_path FROM users WHERE id = $1 LIMIT 1',
+      [targetUserId]
+    );
+    if (uRes.rowCount === 0) {
+      res.status(404).json({ detail: 'User not found' });
+      return;
+    }
+    const targetUser = uRes.rows[0];
     res.json({
       user_id: targetUserId,
-      name: req.user.name,
-      public_email: req.user.email,
+      name: targetUser.name,
+      photo_path: targetUser.photo_path || null,
+      public_email: targetUser.email,
       designation: 'Assistant Professor',
       school: 'IET',
       programmes: ['B.TECH'],
@@ -325,13 +377,151 @@ router.get('/faculty/me/profile', requireProfessorOrAdmin, async (req, res) => {
 });
 
 /**
+ * PATCH /faculty/me/photo
+ * Allows a professor (or admin for any faculty user_id) to upload/update or remove their public faculty portrait.
+ * Stores a validated compressed WebP data URL (or https:// URL) in users.photo_path so everyone can see it.
+ */
+router.patch('/faculty/me/photo', requireProfessorOrAdmin, profileWriteLimiter, async (req, res) => {
+  const db = await getDb();
+  const targetUserId =
+    isFullAdminUser(req.user) && req.body?.user_id
+      ? Number(req.body.user_id)
+      : Number(req.user.id);
+
+  if (!Number.isFinite(targetUserId) || targetUserId <= 0) {
+    res.status(400).json({ detail: 'Invalid target user ID' });
+    return;
+  }
+
+  const raw = String(req.body?.photo_data_url ?? '').trim();
+  let normalizedPhoto = null;
+
+  if (raw) {
+    if (raw.startsWith('data:image/')) {
+      // Strictly enforce lightweight WebP (< 150 KB binary / ~205 KB base64)
+      const validWebpDataUrl = /^data:image\/webp;base64,[A-Za-z0-9+/=]+$/i.test(raw);
+      if (!validWebpDataUrl) {
+        res.status(400).json({
+          detail: 'Photos must be converted to WebP format before upload.',
+        });
+        return;
+      }
+      const approxBytes = Math.ceil(((raw.length - 'data:image/webp;base64,'.length) * 3) / 4);
+      if (approxBytes > 150 * 1024) {
+        res.status(400).json({
+          detail: 'WebP photo must be 150 KB or smaller.',
+        });
+        return;
+      }
+      normalizedPhoto = raw;
+    } else {
+      const urlCheck = validateHttpsUrl(raw, { required: true, label: 'Faculty photo URL' });
+      if (!urlCheck.ok) {
+        res.status(400).json({ detail: urlCheck.error });
+        return;
+      }
+      normalizedPhoto = urlCheck.value;
+    }
+  }
+
+  const upd = await db.query(
+    `UPDATE users
+     SET photo_path = $1, updated_at = NOW()
+     WHERE id = $2
+     RETURNING id, name, photo_path`,
+    [normalizedPhoto, targetUserId]
+  );
+
+  if (upd.rowCount === 0) {
+    res.status(404).json({ detail: 'Faculty user not found' });
+    return;
+  }
+
+  await invalidateCachePrefix('faculty:');
+  await writeAuditLog(db, {
+    actorId: req.user.id,
+    action: normalizedPhoto ? 'FACULTY_PHOTO_UPDATED' : 'FACULTY_PHOTO_REMOVED',
+    entityType: 'USER',
+    entityId: targetUserId,
+    metadata: { has_photo: Boolean(normalizedPhoto) },
+  });
+
+  res.json({
+    message: normalizedPhoto
+      ? 'Faculty photo updated — now visible to all students and visitors!'
+      : 'Faculty photo removed',
+    user_id: targetUserId,
+    photo_path: upd.rows[0].photo_path || null,
+  });
+});
+
+/**
+ * PATCH /faculty/me/card-style
+ * Allows a professor (or admin for any faculty user_id) to select their public Faculty Directory card design.
+ */
+router.patch('/faculty/me/card-style', requireProfessorOrAdmin, profileWriteLimiter, async (req, res) => {
+  const db = await getDb();
+  const targetUserId =
+    isFullAdminUser(req.user) && req.body?.user_id
+      ? Number(req.body.user_id)
+      : Number(req.user.id);
+  const style = String(req.body?.card_style || '').trim().toLowerCase();
+
+  if (!Number.isFinite(targetUserId) || targetUserId <= 0) {
+    res.status(400).json({ detail: 'Invalid target user ID' });
+    return;
+  }
+  if (!ALLOWED_CARD_STYLES.has(style)) {
+    res.status(400).json({
+      detail: `Invalid card style. Choose one of: ${Array.from(ALLOWED_CARD_STYLES).join(', ')}`,
+    });
+    return;
+  }
+
+  const upd = await db.query(
+    `UPDATE professor_profiles
+     SET card_style = $1, updated_at = NOW()
+     WHERE user_id = $2
+     RETURNING user_id, card_style`,
+    [style, targetUserId]
+  );
+
+  if (upd.rowCount === 0) {
+    res.status(404).json({ detail: 'Professor profile not found' });
+    return;
+  }
+
+  await invalidateCachePrefix('faculty:');
+  await writeAuditLog(db, {
+    actorId: req.user.id,
+    action: 'FACULTY_CARD_STYLE_UPDATED',
+    entityType: 'PROFESSOR_PROFILE',
+    entityId: targetUserId,
+    metadata: { card_style: style },
+  });
+
+  res.json({
+    message: 'Card design updated!',
+    user_id: targetUserId,
+    card_style: upd.rows[0].card_style,
+  });
+});
+
+/**
  * PUT /faculty/me/profile
  * Professor updates their public academic profile & private notes
  */
 router.put('/faculty/me/profile', requireProfessorOrAdmin, profileWriteLimiter, async (req, res) => {
   const db = await getDb();
   const targetUserId =
-    req.user.is_admin && req.body.user_id ? Number(req.body.user_id) : Number(req.user.id);
+    isFullAdminUser(req.user) && req.body.user_id
+      ? Number(req.body.user_id)
+      : Number(req.user.id);
+
+  if (!Number.isFinite(targetUserId) || targetUserId <= 0) {
+    res.status(400).json({ detail: 'Invalid target user ID' });
+    return;
+  }
 
   const {
     name,
@@ -373,6 +563,15 @@ router.put('/faculty/me/profile', requireProfessorOrAdmin, profileWriteLimiter, 
         .map((s) => s.trim())
         .filter(Boolean);
 
+  const targetUserRes = await db.query('SELECT email FROM users WHERE id = $1 LIMIT 1', [
+    targetUserId,
+  ]);
+  if (targetUserRes.rowCount === 0) {
+    res.status(404).json({ detail: 'Target faculty user not found' });
+    return;
+  }
+  const fallbackEmail = targetUserRes.rows[0].email;
+
   const profileRow = await withTransaction(db, async (tx) => {
     if (name) {
       await tx.query('UPDATE users SET name = $1, updated_at = NOW() WHERE id = $2', [
@@ -409,7 +608,7 @@ router.put('/faculty/me/profile', requireProfessorOrAdmin, profileWriteLimiter, 
         school || 'IET',
         JSON.stringify(progArr),
         JSON.stringify(batchArr),
-        public_email || req.user.email,
+        public_email ? String(public_email).trim() : fallbackEmail,
         public_phone || null,
         cabin_number || null,
         office_hours || null,

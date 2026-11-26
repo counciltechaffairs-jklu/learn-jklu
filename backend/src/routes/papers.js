@@ -77,8 +77,8 @@ router.get('/papers/public/all', catalogBulkLimiter, async (req, res) => {
 });
 
 router.get('/papers/public', async (req, res) => {
-  const page = Math.max(1, Number(req.query.page || 1));
-  const size = Math.min(100, Math.max(1, Number(req.query.limit || req.query.size || 24)));
+  const page = parsePositiveInt(req.query.page) || 1;
+  const size = Math.min(100, parsePositiveInt(req.query.limit || req.query.size) || 24);
   const offset = (page - 1) * size;
 
   const allPapers = await getApprovedCatalogIndex();
@@ -128,8 +128,8 @@ router.get('/papers', async (req, res) => {
       : `WHERE p.uploaded_by = $${params.length}`;
   }
 
-  const page = Math.max(1, Number(req.query.page || 1));
-  const limit = Math.min(500, Math.max(1, Number(req.query.limit || 200)));
+  const page = parsePositiveInt(req.query.page) || 1;
+  const limit = Math.min(500, parsePositiveInt(req.query.limit) || 200);
   const offset = (page - 1) * limit;
 
   const db = await getDb();
@@ -152,6 +152,16 @@ router.get('/papers', async (req, res) => {
     res.setHeader('X-Page', String(page));
     res.setHeader('X-Limit', String(limit));
     res.json(result.rows.map((r) => formatPaperResponse(r, isStaff)));
+    return;
+  }
+
+  // Only fall back to static catalog if PostgreSQL papers table itself is empty
+  const anyDbPaper = await db.query('SELECT 1 FROM papers LIMIT 1');
+  if (anyDbPaper.rowCount > 0) {
+    res.setHeader('X-Total-Count', '0');
+    res.setHeader('X-Page', String(page));
+    res.setHeader('X-Limit', String(limit));
+    res.json([]);
     return;
   }
 

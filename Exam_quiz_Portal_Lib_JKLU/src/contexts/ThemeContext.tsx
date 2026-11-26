@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect } from 'react';
 import type { ReactNode } from 'react';
 
 export type ThemeMode = 'light' | 'dark';
@@ -26,37 +26,28 @@ interface ThemeProviderProps {
 const STORAGE_KEY = 'jklu_portal_theme_v2';
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
-  // Light theme is strictly the default
-  const [theme, setThemeState] = useState<ThemeMode>('light');
+  // Permanently locked to Light mode across all routes
+  const theme: ThemeMode = 'light';
 
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY) as ThemeMode | null;
-    const initial: ThemeMode = saved === 'dark' ? 'dark' : 'light';
-    setThemeState(initial);
-    applyThemeToDom(initial);
+    const root = window.document.documentElement;
+    root.classList.remove('dark');
+    root.classList.add('light');
+    root.style.colorScheme = 'light';
+    try {
+      localStorage.setItem(STORAGE_KEY, 'light');
+    } catch {}
   }, []);
 
-  const applyThemeToDom = (mode: ThemeMode) => {
+  const setTheme = (_mode: ThemeMode) => {
     const root = window.document.documentElement;
-    if (mode === 'dark') {
-      root.classList.remove('light');
-      root.classList.add('dark');
-      root.style.colorScheme = 'dark';
-    } else {
-      root.classList.remove('dark');
-      root.classList.add('light');
-      root.style.colorScheme = 'light';
-    }
-  };
-
-  const setTheme = (mode: ThemeMode) => {
-    setThemeState(mode);
-    localStorage.setItem(STORAGE_KEY, mode);
-    applyThemeToDom(mode);
+    root.classList.remove('dark');
+    root.classList.add('light');
+    root.style.colorScheme = 'light';
   };
 
   const toggleTheme = () => {
-    setTheme(theme === 'light' ? 'dark' : 'light');
+    setTheme('light');
   };
 
   return (

@@ -56,7 +56,7 @@ const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
   const [mobileBlobUrl, setMobileBlobUrl] = useState<string | null>(null);
   const [relatedCourses, setRelatedCourses] = useState<Array<{ code: string; name: string; reason?: string }>>([]);
   const [courseFacultyInfo, setCourseFacultyInfo] = useState<{
-    offering?: { offering_id: number; course_code: string };
+    offering?: { offering_id: number; course_code: string; can_open_classroom?: boolean };
     instructors?: Array<{ user_id: number; name: string; role_label: string; public_email: string; public_phone?: string }>;
     tas?: Array<{ id: number; public_name: string; public_phone?: string; public_email: string }>;
   } | null>(null);
@@ -535,7 +535,8 @@ const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                   </a>
                 ))}
             </div>
-            {courseFacultyInfo.offering?.offering_id && (
+            {courseFacultyInfo.offering?.offering_id &&
+              courseFacultyInfo.offering?.can_open_classroom === true && (
               <a
                 href={`/classroom/${courseFacultyInfo.offering.offering_id}`}
                 className="px-2.5 py-1 rounded-md bg-purple-600 text-white font-semibold hover:bg-purple-500"

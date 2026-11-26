@@ -40,10 +40,33 @@ function resolveWritableStorageBase() {
 
 export const JWT_SECRET = resolveJwtSecret();
 
+function resolveAdminSecretPath() {
+  const raw = String(process.env.ADMIN_SECRET_PATH || '').trim().replace(/^\/+|\/+$/g, '');
+  if (raw) return raw;
+  if (IS_PRODUCTION) {
+    console.warn(
+      '⚠️ [Security] ADMIN_SECRET_PATH env var is not set in production; admin portal path will remain locked.'
+    );
+    return '';
+  }
+  return 'cota-jklu';
+}
+
+export const ADMIN_SECRET_PATH = resolveAdminSecretPath();
+
+export function isValidAdminSecretSlug(candidate) {
+  const expected = ADMIN_SECRET_PATH;
+  const received = String(candidate || '').trim().replace(/^\/+|\/+$/g, '');
+  if (!expected || !received) return false;
+  const a = crypto.createHash('sha256').update(expected).digest();
+  const b = crypto.createHash('sha256').update(received).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 export const PUBLIC_BASE_URL = (
   process.env.PUBLIC_BASE_URL ||
   (process.env.VERCEL
-    ? 'https://paper-portal-588554backend-2nhi.vercel.app'
+    ? 'https://learn-jklu99557erhu.vercel.app'
     : 'http://localhost:8001')
 ).replace(/\/$/, '');
 
@@ -57,6 +80,7 @@ export const STORAGE_CACHE_DIR = path.join(STORAGE_BASE_DIR, 'cache');
 export const ALLOWED_ORIGINS = new Set(
   [
     'https://exam-quiz-portal-lib-jklu.vercel.app',
+    'https://learnjklu.vercel.app',
     ...(!IS_PRODUCTION
       ? [
           'http://localhost:3000',
@@ -66,6 +90,7 @@ export const ALLOWED_ORIGINS = new Set(
         ]
       : []),
     ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : []),
+    ...(process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : []),
   ]
     .map((o) => o.trim().replace(/\/$/, ''))
     .filter(Boolean)

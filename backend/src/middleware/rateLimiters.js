@@ -65,6 +65,14 @@ export const catalogBulkLimiter = rateLimit({
   message: { detail: 'Too many catalog export requests. Please wait a minute.' },
 });
 
+export const adminSecretVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { detail: 'Too many admin portal verification attempts. Please try again later.' },
+});
+
 const MAX_CONCURRENT_STREAMS_PER_IP = 5;
 const MAX_GLOBAL_CONCURRENT_STREAMS = 60;
 export const MAX_ACTIVE_BATCH_ZIPS = 5;

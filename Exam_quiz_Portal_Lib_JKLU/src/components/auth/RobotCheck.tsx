@@ -195,7 +195,7 @@ const RobotCheck: React.FC<RobotCheckProps> = ({ onChange, resetKey = 0 }) => {
   if (RECAPTCHA_SITE_KEY) {
     return (
       <div className="py-1 flex justify-center overflow-hidden">
-        <div ref={recaptchaRef} className="transform scale-[0.92] sm:scale-100 origin-center" />
+        <div ref={recaptchaRef} className="transform scale-[0.86] sm:scale-100 origin-center" />
       </div>
     );
   }

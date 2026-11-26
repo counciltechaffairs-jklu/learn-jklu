@@ -3,6 +3,7 @@ import http from 'node:http';
 import app from './app.js';
 import { initDatabaseAndSeed, getDb, closeDb } from './config/db.js';
 import { closeCache } from './config/cache.js';
+import { checkNeo4jHealth, closeNeo4j } from './config/neo4j.js';
 import { flushPendingDownloadCounts } from './utils/pdfStorage.js';
 
 const PORT = Number(process.env.PORT || 8001);
@@ -31,6 +32,9 @@ async function gracefulShutdown(signal) {
     await closeCache();
   } catch {}
   try {
+    await closeNeo4j();
+  } catch {}
+  try {
     await closeDb();
   } catch (err) {
     console.warn('[Shutdown] Failed to close DB cleanly:', err?.message || err);
@@ -46,6 +50,7 @@ async function bootstrap() {
   const startMs = Date.now();
   await initDatabaseAndSeed();
   const db = await getDb();
+  const neo4jHealth = await checkNeo4jHealth().catch(() => ({ configured: false, connected: false }));
 
   httpServer = http.createServer(app);
   httpServer.keepAliveTimeout = 65000;
@@ -53,9 +58,15 @@ async function bootstrap() {
   httpServer.maxConnections = 5000;
 
   httpServer.listen(PORT, '0.0.0.0', () => {
+    const graphLabel = neo4jHealth.connected
+      ? 'Neo4j AuraDB Connected'
+      : neo4jHealth.configured
+        ? 'Neo4j Fail-Open Fallback'
+        : 'In-Memory Graph Engine';
     console.log(`\n====================================================================`);
     console.log(`🚀 Learn JKLU 2.0 Express.js Engine listening on http://localhost:${PORT}`);
     console.log(`🐘 Database Engine : ${db.engineName}`);
+    console.log(`🕸️ Graph Engine    : ${graphLabel}`);
     console.log(`⚡ Startup Time    : ${Date.now() - startMs} ms`);
     console.log(`====================================================================\n`);
   });

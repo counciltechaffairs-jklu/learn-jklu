@@ -18,7 +18,7 @@ const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
   }
 
   if (!user) {
-    return <Navigate to="/admin-login" replace />;
+    return <Navigate to="/home" replace />;
   }
 
   const allowedRoles = new Set(['full_admin', 'sub_admin', 'paper_admin', 'coding_ta']);

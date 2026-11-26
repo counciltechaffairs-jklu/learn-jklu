@@ -5,13 +5,32 @@
 @tailwind utilities;
 
 :root {
-  --editorial-bg: #FAF9F6;
+  --editorial-bg: #F8F7F4;
   --editorial-surface: #FFFFFF;
   --editorial-ink: #0A0A0C;
-  --editorial-muted: #5C5B57;
-  --editorial-border: #E5E2DC;
+  --editorial-muted: #353430;
+  --editorial-border: #DCD8D0;
   --editorial-vermilion: #E04F33;
   --editorial-indigo: #4F46E5;
+
+  /* Motion Curves & Duration Tokens (Emil Kowalski Design Engineering) */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --duration-press: 100ms;
+  --duration-ui: 200ms;
+  --duration-dropdown: 180ms;
+  --duration-modal: 220ms;
+  --duration-drawer: 280ms;
+
+  /* Concentric Geometry & Elevation (Dimensional Drawing) */
+  --border-w: 1px;
+  --radius-card: 16px;
+  --inset-sm: 4px;
+  --radius-inner: calc(var(--radius-card) - var(--border-w) - var(--inset-sm));
+  --radius-control: 10px;
+  --shadow-surface: 0 1px 2px rgba(10, 10, 12, 0.04), 0 8px 24px rgba(10, 10, 12, 0.04);
+  --shadow-elevated: 0 2px 6px rgba(10, 10, 12, 0.06), 0 16px 40px rgba(10, 10, 12, 0.09);
 }
 
 .dark {
@@ -22,6 +41,8 @@
   --editorial-border: #232329;
   --editorial-vermilion: #F26346;
   --editorial-indigo: #6366F1;
+  --shadow-surface: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 24px rgba(0, 0, 0, 0.3);
+  --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.35), 0 16px 40px rgba(0, 0, 0, 0.45);
 }
 
 @layer base {
@@ -42,6 +63,17 @@
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
   }
+
+  /* Optical display tracking & tight leading per Apple Typography guidance */
+  h1 {
+    letter-spacing: -0.025em;
+    line-height: 1.12;
+  }
+
+  h2 {
+    letter-spacing: -0.02em;
+    line-height: 1.18;
+  }
 }
 
 @layer components {
@@ -54,19 +86,46 @@
   .editorial-card {
     background-color: var(--editorial-surface);
     border: 1px solid var(--editorial-border);
-    transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    box-shadow: var(--shadow-surface);
+    transition:
+      border-color var(--duration-ui) var(--ease-out),
+      transform var(--duration-ui) var(--ease-out);
   }
 
-  .editorial-card:hover {
-    border-color: var(--editorial-ink);
+  @media (hover: hover) and (pointer: fine) {
+    .editorial-card:hover {
+      border-color: var(--editorial-ink);
+      box-shadow: var(--shadow-elevated);
+    }
+
+    .hover-lift {
+      transition:
+        transform var(--duration-ui) var(--ease-out),
+        box-shadow var(--duration-ui) var(--ease-out),
+        border-color var(--duration-ui) var(--ease-out);
+    }
+
+    .hover-lift:hover {
+      transform: translateY(-2px);
+    }
   }
 
   .btn-primary {
-    @apply bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] font-medium py-2.5 px-5 rounded-md transition-all duration-200 hover:opacity-90;
+    @apply bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] font-medium py-2.5 px-5 rounded-md hover:opacity-90 active:scale-[0.97];
+    transition:
+      background-color var(--duration-press) var(--ease-out),
+      color var(--duration-press) var(--ease-out),
+      transform var(--duration-press) var(--ease-out),
+      opacity var(--duration-press) var(--ease-out);
   }
 
   .btn-secondary {
-    @apply border border-[#E5E2DC] dark:border-[#232329] bg-white dark:bg-[#121216] text-[#0A0A0C] dark:text-[#F5F4F0] font-medium py-2.5 px-5 rounded-md transition-all duration-200 hover:border-[#0A0A0C] dark:hover:border-[#F5F4F0];
+    @apply border border-[#E5E2DC] dark:border-[#232329] bg-white dark:bg-[#121216] text-[#0A0A0C] dark:text-[#F5F4F0] font-medium py-2.5 px-5 rounded-md hover:border-[#0A0A0C] dark:hover:border-[#F5F4F0] active:scale-[0.97];
+    transition:
+      background-color var(--duration-press) var(--ease-out),
+      border-color var(--duration-press) var(--ease-out),
+      color var(--duration-press) var(--ease-out),
+      transform var(--duration-press) var(--ease-out);
   }
 
   .input-field {
@@ -79,5 +138,347 @@
   }
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
+  }
+}
+
+/* GPU-composited modal, drawer, and trigger-anchored popover entrances */
+@keyframes kfBackdropFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes kfModalPanelIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes kfDrawerPanelIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes kfPopoverIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.modal-backdrop-enter {
+  animation: kfBackdropFade 180ms var(--ease-out) both;
+}
+
+.modal-panel-enter {
+  animation: kfModalPanelIn var(--duration-modal) var(--ease-out) both;
+  transform-origin: center;
+}
+
+.drawer-panel-enter {
+  animation: kfDrawerPanelIn var(--duration-drawer) var(--ease-drawer) both;
+}
+
+.popover-panel-enter {
+  animation: kfPopoverIn var(--duration-dropdown) var(--ease-out) both;
+  transform-origin: top right;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Global Light-Mode Readability Boost: eliminate washed-out gray/transparent text */
+html:not(.dark) .text-\[\#5C5B57\] {
+  color: #353430 !important;
+}
+html:not(.dark) .text-\[\#8E8D88\],
+html:not(.dark) .text-\[\#94938E\],
+html:not(.dark) .text-\[\#A09F9A\] {
+  color: #44433E !important;
+}
+html:not(.dark) input::placeholder,
+html:not(.dark) textarea::placeholder {
+  color: #52514C !important;
+  opacity: 1 !important;
+}
+
+/* ==========================================================================
+   Dimensional Drawing Drafting Utilities (enesozturk/dimensional-drawing)
+   Monochrome technical linework, 45deg hatching, boxed indices, & Spec Grid.
+   ========================================================================== */
+
+.dw-hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(10, 10, 12, 0.055) 0 1px,
+    transparent 1px 7px
+  );
+}
+
+.dark .dw-hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(245, 244, 240, 0.07) 0 1px,
+    transparent 1px 7px
+  );
+}
+
+.dw-centerline {
+  height: 1px;
+  background-image: linear-gradient(
+    to right,
+    rgba(10, 10, 12, 0.35) 0 10px,
+    transparent 10px 13px,
+    rgba(10, 10, 12, 0.35) 13px 15px,
+    transparent 15px 18px
+  );
+  background-size: 18px 1px;
+  background-repeat: repeat-x;
+}
+
+.dark .dw-centerline {
+  background-image: linear-gradient(
+    to right,
+    rgba(245, 244, 240, 0.3) 0 10px,
+    transparent 10px 13px,
+    rgba(245, 244, 240, 0.3) 13px 15px,
+    transparent 15px 18px
+  );
+}
+
+.dw-slot {
+  border: 1px dashed rgba(10, 10, 12, 0.28);
+}
+
+.dark .dw-slot {
+  border-color: rgba(245, 244, 240, 0.24);
+}
+
+.dw-note-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  border: 1px solid rgba(10, 10, 12, 0.32);
+  border-radius: 4px;
+  background: #ffffff;
+  color: #0a0a0c;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+
+.dark .dw-note-box {
+  border-color: rgba(245, 244, 240, 0.28);
+  background: #141418;
+  color: #f5f4f0;
+}
+
+.dw-titleblock {
+  border: 1px solid rgba(10, 10, 12, 0.2);
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.dark .dw-titleblock {
+  border-color: rgba(245, 244, 240, 0.16);
+  background: rgba(17, 17, 23, 0.85);
+}
+
+/* Corner registration crosshairs & hover drafting motion for cards */
+.dw-crosshair-card {
+  position: relative;
+}
+
+.dw-crosshair-card::before,
+.dw-crosshair-card::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  pointer-events: none;
+  z-index: 25;
+  opacity: 0.28;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+
+.dw-crosshair-card::before {
+  top: 7px;
+  left: 7px;
+  border-top: 1px solid rgba(10, 10, 12, 0.62);
+  border-left: 1px solid rgba(10, 10, 12, 0.62);
+}
+
+.dw-crosshair-card::after {
+  bottom: 7px;
+  right: 7px;
+  border-bottom: 1px solid rgba(10, 10, 12, 0.62);
+  border-right: 1px solid rgba(10, 10, 12, 0.62);
+}
+
+.dark .dw-crosshair-card::before {
+  border-top-color: rgba(245, 244, 240, 0.5);
+  border-left-color: rgba(245, 244, 240, 0.5);
+}
+
+.dark .dw-crosshair-card::after {
+  border-bottom-color: rgba(245, 244, 240, 0.5);
+  border-right-color: rgba(245, 244, 240, 0.5);
+}
+
+.dw-draft-hover-bar {
+  transform: scaleX(0.001);
+  transform-origin: left center;
+  opacity: 0;
+  transition:
+    transform 240ms var(--ease-out),
+    opacity 180ms var(--ease-out);
+}
+
+.dw-draft-shadow {
+  opacity: 0;
+  transform: translate(0, 0);
+  transition:
+    opacity 220ms var(--ease-out),
+    transform 240ms var(--ease-out);
+}
+
+.dw-draft-callout {
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 180ms var(--ease-out),
+    transform 220ms var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dw-crosshair-card:hover::before {
+    opacity: 0.92;
+    transform: translate(-2px, -2px);
+  }
+  .dw-crosshair-card:hover::after {
+    opacity: 0.92;
+    transform: translate(2px, 2px);
+  }
+  .group\/draft:hover .dw-draft-hover-bar {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  .group\/draft:hover .dw-draft-shadow {
+    opacity: 1;
+    transform: translate(5px, 5px);
+  }
+  .group\/draft:hover .dw-draft-callout {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .group\/draft:hover .dw-draft-lift {
+    transform: translateY(-2px);
+  }
+}
+
+.dw-draft-lift {
+  transition: transform 220ms var(--ease-out);
+}
+
+/* Live interactive "Spec Grid" architectural overlay mode */
+html[data-spec-grid='true'] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(10, 10, 12, 0.055) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(10, 10, 12, 0.055) 1px, transparent 1px),
+    linear-gradient(to right, rgba(10, 10, 12, 0.095) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(10, 10, 12, 0.095) 1px, transparent 1px);
+  background-size: 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+}
+
+html.dark[data-spec-grid='true'] body::after {
+  background-image:
+    linear-gradient(to right, rgba(245, 244, 240, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(245, 244, 240, 0.045) 1px, transparent 1px),
+    linear-gradient(to right, rgba(245, 244, 240, 0.085) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(245, 244, 240, 0.085) 1px, transparent 1px);
+  background-size: 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+}
+
+html[data-spec-grid='true'] .dw-crosshair-card::before,
+html[data-spec-grid='true'] .dw-crosshair-card::after {
+  opacity: 0.95;
+}
+
+html[data-spec-grid='true'] section.rounded-2xl,
+html[data-spec-grid='true'] article.rounded-2xl {
+  outline: 1px dashed rgba(10, 10, 12, 0.24);
+  outline-offset: 4px;
+}
+
+html.dark[data-spec-grid='true'] section.rounded-2xl,
+html.dark[data-spec-grid='true'] article.rounded-2xl {
+  outline: 1px dashed rgba(245, 244, 240, 0.22);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dw-crosshair-card::before,
+  .dw-crosshair-card::after,
+  .dw-draft-hover-bar,
+  .dw-draft-shadow,
+  .dw-draft-callout,
+  .dw-draft-lift {
+    transition-duration: 0.01ms !important;
+    transform: none !important;
+  }
+}
+
+/* Apple Accessibility Signals: Reduced Transparency & Increased Contrast */
+@media (prefers-reduced-transparency: reduce) {
+  header.backdrop-blur-xl,
+  .backdrop-blur-sm,
+  .backdrop-blur-md,
+  .backdrop-blur-xl {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    background-color: var(--editorial-surface) !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --editorial-border: #8B8880;
+  }
+  .dark {
+    --editorial-border: #52525E;
   }
 }

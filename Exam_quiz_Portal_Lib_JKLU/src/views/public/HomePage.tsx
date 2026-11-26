@@ -17,20 +17,33 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  AlertTriangle,
 } from 'lucide-react';
+import {
+  FacultyCardPatternArt,
+  resolveFacultyCardStyle,
+} from '@/components/faculty/facultyCardStyles';
 import HeroBackgroundAnimation from '@/components/layout/HeroBackgroundAnimation';
 import GlobalNavbar from '@/components/layout/GlobalNavbar';
+import { ReleaseCourseModal } from '@/components/classroom/ReleaseCourseModal';
 import Footer from '@/components/layout/Footer';
 import { Button } from '@/components/ui/button';
 import { BackgroundBeams } from '@/components/aceternity/background-beams';
 import { TextGenerateEffect } from '@/components/aceternity/text-generate-effect';
 import { HeroPaperDeck } from '@/components/aceternity/hero-paper-deck';
+import { StudentStageshowSection } from '@/components/home/StudentStageshowSection';
+import TechText from '@/components/animations/TechText';
+import {
+  DimensionalSpecDivider,
+  DimensionalDraftCard,
+} from '@/components/dimensional/DimensionalKit';
 import { ScrollProgressBar } from '@/components/animations/MotionPrimitives';
 import { CountUp } from '@/components/viz/CountUp';
 import { Sparkline } from '@/components/viz/Sparkline';
 import { ProportionBar } from '@/components/viz/ProportionBar';
 import { ExamTypePictogram } from '@/components/viz/Pictograms';
 import { API } from '@/utils/api';
+import { classroomApi } from '@/utils/classroomApi';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import jkluCampusHeroImg from '@/assets/generated/jklu_campus_hero.png';
@@ -86,20 +99,6 @@ const HomePage: React.FC = () => {
 
   // Release Course Modal (for Professor / Admin)
   const [showReleaseModal, setShowReleaseModal] = useState(false);
-  const [releasing, setReleasing] = useState(false);
-  const [releaseForm, setReleaseForm] = useState({
-    course_code: '',
-    course_name: '',
-    programme: 'B.TECH',
-    semester: '3',
-    batch_year: '2024-2028',
-    section: 'Sec A & B',
-    co_professor_emails: '',
-    tcs_ion_course_id: '',
-    ta_name: '',
-    ta_email: '',
-    ta_phone: '',
-  });
 
   const isProfessorOrAdmin = Boolean(
     user && (user.is_admin || user.admin_role === 'full_admin' || user.admin_role === 'professor')
@@ -113,7 +112,7 @@ const HomePage: React.FC = () => {
         API.client.get('/faculty/directory'),
         API.getArchiveStats().catch(() => null),
         user
-          ? API.client.get('/classroom/offerings')
+          ? classroomApi.listOfferings().then((data) => ({ data }))
           : Promise.resolve({ data: { items: [] } }),
       ]);
       if (metricsRes?.data?.counts) {
@@ -151,25 +150,35 @@ const HomePage: React.FC = () => {
     loadAcademicHub();
   }, [user?.id]);
 
-  // Hero entrance animation matching original editorial landing feel
+  // Hero entrance animation respecting reduced-motion & UI speed budget
   useEffect(() => {
-    anime.timeline({ easing: 'easeOutExpo' })
+    const prefersReduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (prefersReduced) {
+      document.querySelectorAll('.anim-hero-line, .anim-hero-card').forEach((el) => {
+        (el as HTMLElement).style.opacity = '1';
+      });
+      return;
+    }
+    anime
+      .timeline({ easing: 'cubicBezier(0.23, 1, 0.32, 1)' })
       .add({
         targets: '.anim-hero-line',
-        translateY: [28, 0],
+        translateY: [12, 0],
         opacity: [0, 1],
-        duration: 900,
-        delay: anime.stagger(90),
+        duration: 360,
+        delay: (_el: Element, i: number) => (i === 0 ? 0 : i === 1 ? 65 : 115),
       })
       .add(
         {
           targets: '.anim-hero-card',
-          translateY: [24, 0],
+          translateY: [14, 0],
           opacity: [0, 1],
-          duration: 800,
-          delay: anime.stagger(110),
+          duration: 360,
+          delay: (_el: Element, i: number) => (i === 0 ? 0 : Math.min(120, i * 40)),
         },
-        '-=500'
+        '-=240'
       );
   }, []);
 
@@ -271,16 +280,16 @@ const HomePage: React.FC = () => {
     setJoining(true);
     setStatusFeedback(null);
     try {
-      const res = await API.client.post('/classroom/offerings/join-code', { join_code: code });
+      const resData = await classroomApi.joinByCode({ join_code: code });
       setStatusFeedback({
         type: 'success',
-        text: res.data?.message || `Enrolled in course ${code}`,
+        text: resData?.message || `Enrolled in course ${code}`,
       });
       setJoinCodeInput('');
       setShowJoinBox(false);
       await loadAcademicHub();
-      if (res.data?.offering_id) {
-        navigate(`/classroom/${res.data.offering_id}`);
+      if (resData?.offering_id) {
+        navigate(`/classroom/${resData.offering_id}`);
       }
     } catch (err: any) {
       setStatusFeedback({
@@ -295,52 +304,6 @@ const HomePage: React.FC = () => {
     }
   };
 
-  const handleReleaseSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setReleasing(true);
-    setStatusFeedback(null);
-    try {
-      const tasPayload =
-        releaseForm.ta_name && releaseForm.ta_email
-          ? [
-              {
-                public_name: releaseForm.ta_name.trim(),
-                public_email: releaseForm.ta_email.trim(),
-                public_phone: releaseForm.ta_phone.trim(),
-              },
-            ]
-          : [];
-      const res = await API.client.post('/classroom/offerings', {
-        course_code: releaseForm.course_code.trim().toUpperCase(),
-        course_name: releaseForm.course_name.trim(),
-        programme: releaseForm.programme,
-        semester: releaseForm.semester,
-        batch_year: releaseForm.batch_year.trim(),
-        section: releaseForm.section.trim(),
-        co_professor_emails: releaseForm.co_professor_emails,
-        tcs_ion_course_id: releaseForm.tcs_ion_course_id.trim(),
-        tas: tasPayload,
-        is_released: true,
-      });
-      setShowReleaseModal(false);
-      setStatusFeedback({
-        type: 'success',
-        text: res.data?.message || 'Course classroom released & batch students auto-enrolled.',
-      });
-      await loadAcademicHub();
-      if (res.data?.offering?.id) {
-        navigate(`/classroom/${res.data.offering.id}`);
-      }
-    } catch (err: any) {
-      setStatusFeedback({
-        type: 'error',
-        text: err?.response?.data?.detail || 'Failed to release course classroom',
-      });
-    } finally {
-      setReleasing(false);
-    }
-  };
-
   return (
     <div className="min-h-screen flex flex-col bg-transparent text-[#0A0A0C] dark:text-[#F5F4F0] selection:bg-[#E04F33] selection:text-white overflow-x-hidden">
       <ScrollProgressBar />
@@ -348,22 +311,31 @@ const HomePage: React.FC = () => {
       {/* Unified Minimalist Global Navbar */}
       <GlobalNavbar />
 
-      {/* Full-Viewport Editorial Hero Section (Matches Original Public Landing Feel) */}
-      <section className="relative min-h-[calc(100svh-3.5rem)] sm:min-h-[calc(100vh-4rem)] w-full flex items-center border-b border-[#E5E2DC] dark:border-[#232329] overflow-hidden">
+      {/* Full-Viewport Light Editorial Hero Section (Cohesive with full-page AeroShards & Light mode) */}
+      <section className="relative min-h-[calc(100svh-3.5rem)] sm:min-h-[calc(100vh-4rem)] w-full flex items-center bg-transparent text-[#0A0A0C] border-b border-[#E5E2DC]/90 overflow-hidden">
+        {/* Subtle smoky-obsidian halo vignette behind shards so shards pop while keeping the hero cohesive & Light */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-0"
+          style={{
+            background:
+              'radial-gradient(640px circle at 24% 40%, rgba(15,15,24,0.06), transparent 65%), radial-gradient(680px circle at 78% 48%, rgba(137,106,189,0.12), rgba(224,79,51,0.07) 48%, transparent 72%)',
+          }}
+        />
         <HeroBackgroundAnimation />
-        <BackgroundBeams className="z-[1] opacity-80" />
+        <BackgroundBeams className="z-[1] opacity-55" />
 
         <div className="relative z-10 max-w-7xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-12 lg:py-16">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-7 sm:gap-10 lg:gap-12 items-center">
             <div className="lg:col-span-7 space-y-4 sm:space-y-6">
-              <div className="anim-hero-line inline-flex items-center gap-2 px-2.5 sm:px-3 py-1 rounded-full border border-[#E5E2DC] dark:border-[#232329] bg-white/90 dark:bg-[#121216]/90 backdrop-blur-sm text-xs shadow-sm max-w-full">
+              <div className="anim-hero-line inline-flex items-center gap-2 px-2.5 sm:px-3 py-1 rounded-full border border-[#DDD8CE] bg-white/95 backdrop-blur-sm text-xs shadow-sm max-w-full">
                 <span className="w-2 h-2 rounded-full bg-[#E04F33] animate-pulse shrink-0" />
-                <span className="font-mono-tabular uppercase tracking-wider text-[10px] sm:text-[11px] text-[#5C5B57] dark:text-[#94938E] truncate">
+                <span className="font-mono-tabular uppercase tracking-[0.04em] sm:tracking-wider text-[9px] sm:text-[11px] text-[#353430] font-medium">
                   JKLU · COUNCIL OF TECHNICAL AFFAIRS · LEARN JKLU 2.0
                 </span>
               </div>
 
-              <h1 className="anim-hero-line text-[32px] sm:text-6xl lg:text-[64px] font-light tracking-tight leading-[1.08] sm:leading-[1.05]">
+              <h1 className="anim-hero-line text-[32px] sm:text-6xl lg:text-[64px] font-light tracking-tight leading-[1.08] sm:leading-[1.05] text-[#0A0A0C]">
                 Classrooms, faculty &amp;{' '}
                 <span className="font-serif-editorial italic font-normal text-[#E04F33]">
                   past papers
@@ -371,7 +343,7 @@ const HomePage: React.FC = () => {
                 for every semester.
               </h1>
 
-              <p className="anim-hero-line text-sm sm:text-lg text-[#5C5B57] dark:text-[#94938E] max-w-2xl leading-relaxed font-normal">
+              <p className="anim-hero-line text-sm sm:text-lg text-[#353430] max-w-2xl leading-relaxed font-normal">
                 <TextGenerateEffect words="Access live course classrooms, co-professors, public TA support, zero-bloat Drive submissions, and verified past exam papers across B.Tech, BBA, BCA, M.Tech, and B.Des." />
               </p>
 
@@ -380,15 +352,15 @@ const HomePage: React.FC = () => {
                 <button
                   type="button"
                   onClick={scrollToConsoleAndFocus}
-                  className="flex-1 flex items-center justify-between px-3.5 sm:px-4 py-3 sm:py-3.5 rounded-md bg-white/95 dark:bg-[#121216]/95 backdrop-blur-sm border border-[#0A0A0C]/20 dark:border-[#F5F4F0]/20 hover:border-[#E04F33] dark:hover:border-[#E04F33] transition-all group text-left shadow-sm min-w-0"
+                  className="flex-1 flex items-center justify-between px-3.5 sm:px-4 py-3 sm:py-3.5 rounded-md bg-white/95 backdrop-blur-sm border border-[#0A0A0C]/25 hover:border-[#E04F33] transition-[border-color,transform] duration-150 active:scale-[0.98] group text-left shadow-sm min-w-0"
                 >
                   <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
                     <Search className="w-4 h-4 text-[#E04F33] shrink-0" />
-                    <span className="text-xs sm:text-sm text-[#5C5B57] dark:text-[#94938E] group-hover:text-[#0A0A0C] dark:group-hover:text-[#F5F4F0] transition-colors truncate">
+                    <span className="text-xs sm:text-sm text-[#353430] group-hover:text-[#0A0A0C] transition-colors truncate">
                       Search courses, faculty, or papers...
                     </span>
                   </div>
-                  <span className="hidden sm:inline-block font-mono-tabular text-xs px-2 py-0.5 rounded bg-[#FAF9F6] dark:bg-[#0A0A0C] border border-[#E5E2DC] dark:border-[#232329] shrink-0 ml-2">
+                  <span className="hidden sm:inline-block font-mono-tabular text-xs px-2 py-0.5 rounded bg-[#FAF9F6] text-[#353430] border border-[#DDD8CE] shrink-0 ml-2">
                     ⌘K
                   </span>
                 </button>
@@ -396,7 +368,7 @@ const HomePage: React.FC = () => {
                 <Button
                   onClick={() => navigate('/past-papers')}
                   size="lg"
-                  className="w-full sm:w-auto h-auto py-3 sm:py-3.5 px-6 whitespace-nowrap"
+                  className="w-full sm:w-auto h-auto py-3 sm:py-3.5 px-6 whitespace-nowrap bg-[#0A0A0C] hover:bg-[#E04F33] text-white border-0 shadow-sm"
                 >
                   <span>Explore Papers</span>
                   <ArrowUpRight className="w-4 h-4" />
@@ -405,7 +377,7 @@ const HomePage: React.FC = () => {
 
               {/* 1-Tap Trending Course Shortcuts */}
               <div className="anim-hero-line flex flex-wrap items-center gap-2 text-xs">
-                <span className="font-mono-tabular text-[11px] uppercase tracking-wider text-[#5C5B57] dark:text-[#94938E]">
+                <span className="font-mono-tabular text-[11px] uppercase tracking-wider text-[#353430] font-medium">
                   Trending:
                 </span>
                 {['CS1135', 'CS1108', 'ID1114', 'MA1121'].map((code) => (
@@ -413,7 +385,7 @@ const HomePage: React.FC = () => {
                     key={code}
                     type="button"
                     onClick={() => navigate(`/past-papers?q=${encodeURIComponent(code)}`)}
-                    className="font-mono-tabular text-[11px] px-2.5 py-1 rounded-full border border-[#E5E2DC] dark:border-[#232329] bg-white/80 dark:bg-[#121216]/80 hover:border-[#E04F33] hover:text-[#E04F33] transition-colors"
+                    className="font-mono-tabular text-[11px] px-2.5 py-1 rounded-full border border-[#DDD8CE] bg-white/90 text-[#0A0A0C] font-medium hover:border-[#E04F33] hover:text-[#E04F33] transition-colors shadow-xs"
                   >
                     {code}
                   </button>
@@ -421,15 +393,15 @@ const HomePage: React.FC = () => {
               </div>
 
               {/* Key University Portal Interactive Stats Band */}
-              <div className="anim-hero-line pt-4 sm:pt-5 grid grid-cols-2 sm:grid-cols-4 gap-3.5 sm:gap-4 border-t border-[#E5E2DC] dark:border-[#232329]">
+              <div className="anim-hero-line pt-4 sm:pt-5 grid grid-cols-2 sm:grid-cols-4 gap-3.5 sm:gap-4 border-t border-[#DDD8CE]">
                 <div className="space-y-1">
                   <Link to="/past-papers" className="group block">
-                    <div className="font-mono-tabular text-xl sm:text-2xl lg:text-[26px] font-semibold whitespace-nowrap group-hover:text-[#E04F33] transition-colors">
+                    <div className="font-mono-tabular text-xl sm:text-2xl lg:text-[26px] font-semibold text-[#0A0A0C] whitespace-nowrap group-hover:text-[#E04F33] transition-colors">
                       {metricsLoaded ? <CountUp value={metrics.approvedPapers} /> : '—'}
                     </div>
-                    <div className="text-[11px] sm:text-xs text-[#5C5B57] dark:text-[#94938E] mt-0.5 inline-flex items-center gap-1">
+                    <div className="text-[11px] sm:text-xs text-[#353430] mt-0.5 inline-flex items-center gap-1">
                       <span>Verified Papers</span>
-                      <ArrowUpRight className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                      <ArrowUpRight className="w-3 h-3 opacity-70 group-hover:opacity-100" />
                     </div>
                   </Link>
                   {yearTrendPoints.some((p: any) => p.value > 0) && (
@@ -447,17 +419,17 @@ const HomePage: React.FC = () => {
                 </div>
 
                 <Link to="/past-papers?focus=search" className="group block">
-                  <div className="font-mono-tabular text-xl sm:text-2xl lg:text-[26px] font-semibold whitespace-nowrap group-hover:text-[#896ABD] transition-colors">
+                  <div className="font-mono-tabular text-xl sm:text-2xl lg:text-[26px] font-semibold text-[#0A0A0C] whitespace-nowrap group-hover:text-[#896ABD] transition-colors">
                     {metricsLoaded ? <CountUp value={metrics.courses} /> : '—'}
                   </div>
-                  <div className="text-[11px] sm:text-xs text-[#5C5B57] dark:text-[#94938E] mt-0.5 inline-flex items-center gap-1">
+                  <div className="text-[11px] sm:text-xs text-[#353430] mt-0.5 inline-flex items-center gap-1">
                     <span>University Courses</span>
-                    <ArrowUpRight className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                    <ArrowUpRight className="w-3 h-3 opacity-70 group-hover:opacity-100" />
                   </div>
                 </Link>
 
                 <Link to="/classroom" className="group block">
-                  <div className="font-mono-tabular text-xl sm:text-2xl lg:text-[26px] font-semibold text-[#896ABD] dark:text-[#C084FC] whitespace-nowrap group-hover:underline">
+                  <div className="font-mono-tabular text-xl sm:text-2xl lg:text-[26px] font-semibold text-[#6F4EA8] whitespace-nowrap group-hover:underline">
                     {metricsLoaded ? (
                       <CountUp
                         value={metrics.activeClassrooms}
@@ -467,9 +439,9 @@ const HomePage: React.FC = () => {
                       '—'
                     )}
                   </div>
-                  <div className="text-[11px] sm:text-xs text-[#5C5B57] dark:text-[#94938E] mt-0.5 inline-flex items-center gap-1">
+                  <div className="text-[11px] sm:text-xs text-[#353430] mt-0.5 inline-flex items-center gap-1">
                     <span>Course Classrooms</span>
-                    <ArrowUpRight className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                    <ArrowUpRight className="w-3 h-3 opacity-70 group-hover:opacity-100" />
                   </div>
                 </Link>
 
@@ -481,21 +453,65 @@ const HomePage: React.FC = () => {
                       '—'
                     )}
                   </div>
-                  <div className="text-[11px] sm:text-xs text-[#5C5B57] dark:text-[#94938E] mt-0.5 inline-flex items-center gap-1">
+                  <div className="text-[11px] sm:text-xs text-[#353430] mt-0.5 inline-flex items-center gap-1">
                     <span>Faculty &amp; Mentors</span>
-                    <ArrowUpRight className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                    <ArrowUpRight className="w-3 h-3 opacity-70 group-hover:opacity-100" />
                   </div>
                 </Link>
               </div>
             </div>
 
-            {/* Right 5 Columns: Interactive 3D-Tilt Paper Deck Showcase */}
-            <div className="lg:col-span-5 anim-hero-card">
-              <HeroPaperDeck
-                heroImageSrc={(jkluCampusHeroImg as any)?.src || jkluCampusHeroImg}
-                papersCount={metrics.approvedPapers}
-                onSelectCourse={(code) => navigate(`/past-papers?q=${encodeURIComponent(code)}`)}
+            {/* Right 5 Columns: Interactive 3D-Tilt Paper Deck Showcase with Soft Halo */}
+            <div className="lg:col-span-5 anim-hero-card relative">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute -inset-5 rounded-3xl blur-2xl opacity-45"
+                style={{
+                  background:
+                    'radial-gradient(circle at 50% 48%, rgba(137,106,189,0.42), rgba(224,79,51,0.22) 55%, transparent 74%)',
+                }}
               />
+              <div className="relative z-10 space-y-2">
+                <div className="w-full h-[94px] sm:h-[104px] lg:h-[110px] relative">
+                  <TechText
+                    text="JKLU"
+                    logoSrc="/black_jklu_logo.png"
+                    logoLabel="LOGO"
+                    logoScale={1.2}
+                    logoGap={0.22}
+                    fontWeight={400}
+                    fontSize={88}
+                    reveal="letter"
+                    dashLength={4}
+                    dashGap={2}
+                    specks={15}
+                    intro="none"
+                    introDuration={2}
+                    clickKick
+                    guides={false}
+                    fontFamily="'Instrument Serif', Georgia, serif"
+                    letterSpacing={0.01}
+                    color="#0A0A0C"
+                    accentColor="#E04F33"
+                    reach={200}
+                    softness={0.7}
+                    lineStyle="dashed"
+                    strokeWidth={1.3}
+                    speed={1}
+                    bounce={0.4}
+                    selection
+                    labels
+                    align="center"
+                    draggable
+                    sweep
+                  />
+                </div>
+                <HeroPaperDeck
+                  heroImageSrc={(jkluCampusHeroImg as any)?.src || jkluCampusHeroImg}
+                  papersCount={metrics.approvedPapers}
+                  onSelectCourse={(code) => navigate(`/past-papers?q=${encodeURIComponent(code)}`)}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -516,7 +532,11 @@ const HomePage: React.FC = () => {
             }`}
           >
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              {statusFeedback.type === 'error' ? (
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+              )}
               <span>{statusFeedback.text}</span>
             </div>
             <button
@@ -528,6 +548,10 @@ const HomePage: React.FC = () => {
             </button>
           </div>
         )}
+
+        {/* Interactive Student Walkthrough (Stageshow: Past Papers & Student Classroom) */}
+        <DimensionalSpecDivider code="SEC 01" label="STUDENT WALKTHROUGH" metric="STAGESHOW INTERACTIVE" />
+        <StudentStageshowSection />
 
         {/* Slim Global Search Bar + Inline Join Code Option */}
         <section className="rounded-2xl p-4 sm:p-5 bg-white/90 dark:bg-[#111117]/85 backdrop-blur-md border border-[#E5E2DC]/90 dark:border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.04)] dark:shadow-[0_12px_40px_rgba(0,0,0,0.35)] space-y-3">
@@ -626,6 +650,7 @@ const HomePage: React.FC = () => {
 
         {/* 3-Pillar "What's Inside Learn JKLU 2.0" Overview Grid */}
         <section className="space-y-4">
+          <DimensionalSpecDivider code="SEC 02" label="ACADEMIC WORKSPACE PILLARS" metric="3 MODULES" />
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2">
             <div>
               <span className="font-mono-tabular text-[10px] uppercase tracking-wider text-[#E04F33] font-semibold">
@@ -642,11 +667,15 @@ const HomePage: React.FC = () => {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             {/* Pillar 1: Verified Past Question Papers */}
-            <article className="rounded-2xl border border-[#E5E2DC]/90 dark:border-white/10 bg-white/90 dark:bg-[#111117]/85 backdrop-blur-md p-5 sm:p-6 flex flex-col justify-between space-y-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.3)]">
+            <DimensionalDraftCard specCode="DWG-01" specLabel="R16" delay={0}>
+            <article className="dw-crosshair-card h-full rounded-2xl border border-[#E5E2DC]/90 dark:border-white/10 bg-white dark:bg-[#111117] p-5 sm:p-6 flex flex-col justify-between space-y-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.3)]">
               <div className="space-y-4">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="w-10 h-10 rounded-xl bg-[#E04F33]/10 text-[#E04F33] flex items-center justify-center shrink-0">
-                    <FileText className="w-5 h-5" />
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-xl bg-[#E04F33]/10 text-[#E04F33] flex items-center justify-center shrink-0">
+                      <FileText className="w-5 h-5" />
+                    </div>
+                    <span className="dw-note-box whitespace-nowrap shrink-0">[01] DWG-ARC</span>
                   </div>
                   <span className="font-mono-tabular text-[11px] text-[#5C5B57] dark:text-[#A09F9A]">
                     {metricsLoaded
@@ -692,13 +721,18 @@ const HomePage: React.FC = () => {
                 <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             </article>
+            </DimensionalDraftCard>
 
             {/* Pillar 2: Course Classrooms (LMS) */}
-            <article className="rounded-2xl border border-[#E5E2DC]/90 dark:border-white/10 bg-white/90 dark:bg-[#111117]/85 backdrop-blur-md p-5 sm:p-6 flex flex-col justify-between space-y-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.3)]">
+            <DimensionalDraftCard specCode="DWG-02" specLabel="R16" delay={0.055}>
+            <article className="dw-crosshair-card h-full rounded-2xl border border-[#E5E2DC]/90 dark:border-white/10 bg-white dark:bg-[#111117] p-5 sm:p-6 flex flex-col justify-between space-y-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.3)]">
               <div className="space-y-4">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="w-10 h-10 rounded-xl bg-[#896ABD]/12 text-[#896ABD] flex items-center justify-center shrink-0">
-                    <BookOpen className="w-5 h-5" />
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-xl bg-[#896ABD]/12 text-[#896ABD] flex items-center justify-center shrink-0">
+                      <BookOpen className="w-5 h-5" />
+                    </div>
+                    <span className="dw-note-box">[02] DWG-LMS</span>
                   </div>
                   <span className="font-mono-tabular text-[11px] text-[#5C5B57] dark:text-[#A09F9A]">
                     {user
@@ -790,13 +824,18 @@ const HomePage: React.FC = () => {
                 )}
               </div>
             </article>
+            </DimensionalDraftCard>
 
             {/* Pillar 3: Faculty & TA Directory */}
-            <article className="rounded-2xl border border-[#E5E2DC]/90 dark:border-white/10 bg-white/90 dark:bg-[#111117]/85 backdrop-blur-md p-5 sm:p-6 flex flex-col justify-between space-y-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.3)]">
+            <DimensionalDraftCard specCode="DWG-03" specLabel="R16" delay={0.095}>
+            <article className="dw-crosshair-card h-full rounded-2xl border border-[#E5E2DC]/90 dark:border-white/10 bg-white dark:bg-[#111117] p-5 sm:p-6 flex flex-col justify-between space-y-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.3)]">
               <div className="space-y-4">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="w-10 h-10 rounded-xl bg-[#0A0A0C]/8 dark:bg-white/10 text-[#0A0A0C] dark:text-[#F5F4F0] flex items-center justify-center shrink-0">
-                    <GraduationCap className="w-5 h-5" />
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-xl bg-[#0A0A0C]/8 dark:bg-white/10 text-[#0A0A0C] dark:text-[#F5F4F0] flex items-center justify-center shrink-0">
+                      <GraduationCap className="w-5 h-5" />
+                    </div>
+                    <span className="dw-note-box">[03] DWG-FAC</span>
                   </div>
                   <span className="font-mono-tabular text-[11px] text-[#5C5B57] dark:text-[#A09F9A]">
                     {metricsLoaded ? metrics.facultyCount : faculty.length} faculty · {uniqueTaCount} course TAs
@@ -804,7 +843,7 @@ const HomePage: React.FC = () => {
                 </div>
 
                 <div>
-                  <h3 className="text-base font-bold tracking-tight">Faculty &amp; TA Directory</h3>
+                  <h3 className="text-base font-bold tracking-tight">Faculty</h3>
                   <p className="text-xs text-[#5C5B57] dark:text-[#A09F9A] mt-1 leading-relaxed">
                     Look up professors, co-instructors, cabin locations, emails, and Teaching Assistant contacts.
                   </p>
@@ -838,22 +877,36 @@ const HomePage: React.FC = () => {
                 <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             </article>
+            </DimensionalDraftCard>
           </div>
         </section>
 
         {/* Interactive Archive Coverage Heatmap & Exam Mix Teaser */}
         {heatmapSeries.length > 0 && (
-          <section className="relative overflow-hidden rounded-2xl border border-[#E5E2DC]/90 dark:border-white/10 bg-white/90 dark:bg-[#111117]/85 backdrop-blur-md p-5 sm:p-7 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.3)]">
-            <img
-              src="/illustrations/archive-abstract.jpg"
-              alt=""
+          <section className="relative overflow-hidden rounded-2xl border border-[#DDD8CE] bg-white/95 backdrop-blur-md p-5 sm:p-7 shadow-[0_6px_28px_rgba(10,10,12,0.05)]">
+            {/* Dark-Shaded Archive Artwork Backdrop with Halo Glow (right edge) */}
+            <div
               aria-hidden="true"
-              className="pointer-events-none select-none hidden md:block absolute right-0 top-0 h-full w-1/2 object-cover opacity-[0.16] dark:opacity-[0.07]"
+              className="pointer-events-none select-none hidden md:block absolute right-0 top-0 bottom-0 w-[38%] overflow-hidden"
               style={{
-                maskImage: 'linear-gradient(to left, black 25%, transparent 95%)',
-                WebkitMaskImage: 'linear-gradient(to left, black 25%, transparent 95%)',
+                maskImage: 'linear-gradient(to left, black 45%, transparent 100%)',
+                WebkitMaskImage: 'linear-gradient(to left, black 45%, transparent 100%)',
               }}
-            />
+            >
+              <div className="absolute inset-0 bg-[#12121A]" />
+              <img
+                src="/illustrations/archive-abstract.jpg"
+                alt=""
+                className="w-full h-full object-cover opacity-80 mix-blend-luminosity"
+              />
+              <div
+                className="absolute inset-0"
+                style={{
+                  background:
+                    'radial-gradient(circle at 75% 32%, rgba(224,79,51,0.34), transparent 55%), radial-gradient(circle at 60% 72%, rgba(137,106,189,0.42), transparent 60%), linear-gradient(90deg, rgba(255,255,255,0.96) 0%, rgba(18,18,26,0.58) 42%, rgba(18,18,26,0.28) 100%)',
+                }}
+              />
+            </div>
 
             <div className="relative z-10 space-y-5">
               <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
@@ -861,17 +914,17 @@ const HomePage: React.FC = () => {
                   <span className="font-mono-tabular text-[10px] uppercase tracking-wider text-[#E04F33] font-semibold">
                     Interactive Archive Atlas · Live Data
                   </span>
-                  <h2 className="text-lg sm:text-xl font-bold tracking-tight mt-0.5">
+                  <h2 className="text-lg sm:text-xl font-bold tracking-tight mt-0.5 text-[#0A0A0C]">
                     Coverage by Programme &amp; Exam Session
                   </h2>
-                  <p className="text-xs text-[#5C5B57] dark:text-[#A09F9A] mt-0.5">
+                  <p className="text-xs text-[#353430] mt-0.5">
                     Click any heatmap cell, trend node, or exam bar segment to jump straight into matching Past Papers.
                   </p>
                 </div>
 
                 <Link
                   to="/past-papers"
-                  className="inline-flex items-center gap-1.5 text-xs font-mono-tabular font-semibold text-[#E04F33] hover:underline shrink-0"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-mono-tabular font-semibold bg-[#12121A] text-white border border-white/15 shadow-[0_0_20px_rgba(137,106,189,0.35)] hover:bg-[#E04F33] transition-colors shrink-0"
                 >
                   <span>Open Full Archive</span>
                   <ArrowRight className="w-3.5 h-3.5" />
@@ -1049,29 +1102,58 @@ const HomePage: React.FC = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {faculty.slice(0, 4).map((prof) => (
+              {faculty.slice(0, 4).map((prof) => {
+                const cardStyle = resolveFacultyCardStyle(prof.card_style);
+                const initials = String(prof.name || 'JK')
+                  .split(/\s+/)
+                  .slice(0, 2)
+                  .map((p: string) => p[0] || '')
+                  .join('')
+                  .toUpperCase();
+                return (
                 <article
                   key={prof.user_id}
-                  className="rounded-2xl border border-[#E5E2DC]/90 dark:border-white/10 bg-white/90 dark:bg-[#111117]/85 backdrop-blur-md p-5 space-y-3"
+                  className="relative overflow-hidden rounded-2xl border border-[#E5E2DC]/90 dark:border-white/10 bg-white/95 dark:bg-[#111117]/85 backdrop-blur-md p-5 space-y-3"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-semibold text-base">{prof.name}</h3>
-                        <span className="px-2 py-0.5 rounded font-mono-tabular text-[10px] bg-black/[0.05] dark:bg-white/[0.08] text-[#5C5B57] dark:text-[#C4C3BE]">
-                          {prof.school}
-                        </span>
+                  <FacultyCardPatternArt
+                    styleId={cardStyle.id}
+                    accent={cardStyle.accentHex}
+                    secondary={cardStyle.secondaryHex}
+                    compact
+                  />
+                  <div className="relative z-10 flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {prof.photo_path ? (
+                        <img
+                          src={prof.photo_path}
+                          alt={prof.name}
+                          className="w-11 h-11 rounded-xl object-cover shrink-0 border border-[#E5E2DC] shadow-sm"
+                        />
+                      ) : (
+                        <div
+                          className={`w-11 h-11 rounded-xl ${cardStyle.avatarBg} text-white font-semibold text-sm flex items-center justify-center shrink-0 shadow-sm`}
+                        >
+                          {initials}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="font-semibold text-base truncate">{prof.name}</h3>
+                          <span className="px-2 py-0.5 rounded font-mono-tabular text-[10px] bg-black/[0.05] dark:bg-white/[0.08] text-[#5C5B57] dark:text-[#C4C3BE]">
+                            {prof.school}
+                          </span>
+                        </div>
+                        <p className="text-xs text-[#5C5B57] dark:text-[#A09F9A] mt-0.5 truncate">
+                          {prof.designation}
+                        </p>
                       </div>
-                      <p className="text-xs text-[#5C5B57] dark:text-[#A09F9A] mt-0.5">
-                        {prof.designation}
-                      </p>
                     </div>
                     <span className="font-mono-tabular text-[11px] text-[#5C5B57] dark:text-[#8E8D88] shrink-0">
                       {(prof.programmes || []).join(' · ')}
                     </span>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs pt-2.5 border-t border-[#E5E2DC]/60 dark:border-white/10">
+                  <div className="relative z-10 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs pt-2.5 border-t border-[#E5E2DC]/60 dark:border-white/10">
                     <a
                       href={`mailto:${prof.public_email}`}
                       className="inline-flex items-center gap-1.5 text-[#0A0A0C] dark:text-[#F5F4F0] hover:text-[#E04F33] truncate"
@@ -1090,7 +1172,7 @@ const HomePage: React.FC = () => {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                  <div className="relative z-10 flex items-center gap-1.5 flex-wrap pt-0.5">
                     <span className="text-[11px] font-mono-tabular text-[#5C5B57] dark:text-[#8E8D88] mr-1">
                       Papers:
                     </span>
@@ -1106,184 +1188,30 @@ const HomePage: React.FC = () => {
                     ))}
                   </div>
                 </article>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
       </main>
 
       {/* Professor / Admin Modal: Release New Course Classroom */}
-      {showReleaseModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-[#FAF9F6] dark:bg-[#111117] border border-[#E5E2DC] dark:border-white/15 rounded-2xl max-w-xl w-full p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="font-mono-tabular text-[10px] uppercase text-[#E04F33] font-semibold">
-                  Auto-Enrolls Matching Batch Students
-                </span>
-                <h3 className="text-base font-bold mt-0.5">Release New Course Classroom</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowReleaseModal(false)}
-                className="px-2.5 py-1 rounded-lg border border-[#E5E2DC] dark:border-white/15 text-xs"
-              >
-                Close
-              </button>
-            </div>
-
-            <form onSubmit={handleReleaseSubmit} className="space-y-3 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="font-mono-tabular text-[10px] uppercase block mb-1 text-[#5C5B57] dark:text-[#A09F9A]">
-                    Course Code *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="CS2104"
-                    value={releaseForm.course_code}
-                    onChange={(e) =>
-                      setReleaseForm({ ...releaseForm, course_code: e.target.value })
-                    }
-                    className="w-full px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]"
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="font-mono-tabular text-[10px] uppercase block mb-1 text-[#5C5B57] dark:text-[#A09F9A]">
-                    Course Name *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Operating Systems"
-                    value={releaseForm.course_name}
-                    onChange={(e) =>
-                      setReleaseForm({ ...releaseForm, course_name: e.target.value })
-                    }
-                    className="w-full px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]"
-                  />
-                </div>
-                <div>
-                  <label className="font-mono-tabular text-[10px] uppercase block mb-1 text-[#5C5B57] dark:text-[#A09F9A]">
-                    Programme
-                  </label>
-                  <select
-                    value={releaseForm.programme}
-                    onChange={(e) => setReleaseForm({ ...releaseForm, programme: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]"
-                  >
-                    <option value="B.TECH">B.TECH</option>
-                    <option value="BBA">BBA</option>
-                    <option value="BCA">BCA</option>
-                    <option value="B.DES">B.DES</option>
-                    <option value="M.TECH">M.TECH</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="font-mono-tabular text-[10px] uppercase block mb-1 text-[#5C5B57] dark:text-[#A09F9A]">
-                    Semester
-                  </label>
-                  <input
-                    type="text"
-                    value={releaseForm.semester}
-                    onChange={(e) => setReleaseForm({ ...releaseForm, semester: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]"
-                  />
-                </div>
-                <div>
-                  <label className="font-mono-tabular text-[10px] uppercase block mb-1 text-[#5C5B57] dark:text-[#A09F9A]">
-                    Target Batch
-                  </label>
-                  <input
-                    type="text"
-                    value={releaseForm.batch_year}
-                    onChange={(e) => setReleaseForm({ ...releaseForm, batch_year: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="font-mono-tabular text-[10px] uppercase block mb-1 text-[#5C5B57] dark:text-[#A09F9A]">
-                    Co-Professor Emails (M:N)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="dr.priya.mehta@jklu.edu.in"
-                    value={releaseForm.co_professor_emails}
-                    onChange={(e) =>
-                      setReleaseForm({ ...releaseForm, co_professor_emails: e.target.value })
-                    }
-                    className="w-full px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]"
-                  />
-                </div>
-                <div>
-                  <label className="font-mono-tabular text-[10px] uppercase block mb-1 text-[#5C5B57] dark:text-[#A09F9A]">
-                    TCS iON Course Code
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="TCS-ION-CS2104"
-                    value={releaseForm.tcs_ion_course_id}
-                    onChange={(e) =>
-                      setReleaseForm({ ...releaseForm, tcs_ion_course_id: e.target.value })
-                    }
-                    className="w-full px-3 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]"
-                  />
-                </div>
-              </div>
-
-              <div className="p-3 rounded-xl border border-[#E5E2DC] dark:border-white/10 space-y-2">
-                <div className="font-mono-tabular text-[10px] uppercase text-[#5C5B57] dark:text-[#A09F9A]">
-                  Optional Public Course TA Card
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <input
-                    type="text"
-                    placeholder="TA Name"
-                    value={releaseForm.ta_name}
-                    onChange={(e) => setReleaseForm({ ...releaseForm, ta_name: e.target.value })}
-                    className="px-2.5 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]"
-                  />
-                  <input
-                    type="email"
-                    placeholder="TA Official Email"
-                    value={releaseForm.ta_email}
-                    onChange={(e) => setReleaseForm({ ...releaseForm, ta_email: e.target.value })}
-                    className="px-2.5 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]"
-                  />
-                  <input
-                    type="text"
-                    placeholder="TA Public Phone"
-                    value={releaseForm.ta_phone}
-                    onChange={(e) => setReleaseForm({ ...releaseForm, ta_phone: e.target.value })}
-                    className="px-2.5 py-1.5 rounded-lg border border-[#E5E2DC] dark:border-white/15 bg-white dark:bg-[#0A0A0C]"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowReleaseModal(false)}
-                  className="px-4 py-2 rounded-xl border border-[#E5E2DC] dark:border-white/15"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={releasing}
-                  className="px-5 py-2 rounded-xl bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] hover:bg-[#E04F33] dark:hover:bg-[#E04F33] dark:hover:text-white font-semibold transition-colors"
-                >
-                  {releasing ? 'Releasing...' : 'Release & Auto-Enroll'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <ReleaseCourseModal
+        isOpen={showReleaseModal}
+        onClose={() => setShowReleaseModal(false)}
+        isAdmin={Boolean(user?.is_admin || user?.admin_role === 'full_admin')}
+        onSuccess={async (data) => {
+          setShowReleaseModal(false);
+          setStatusFeedback({
+            type: 'success',
+            text: data?.message || 'Course classroom released & students enrolled.',
+          });
+          await loadAcademicHub();
+          if (data?.offering?.id) {
+            navigate(`/classroom/${data.offering.id}`);
+          }
+        }}
+      />
 
       <div className="relative z-10">
         <Footer />

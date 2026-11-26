@@ -1,0 +1,549 @@
+/* Custom scoped styles for Learn JKLU 2.0 Student Stageshow Demos.
+ * Loaded globally via _app.tsx; all rules are scoped inside .ss-student-demo
+ * using explicit property transitions and subtle scale curves.
+ */
+
+.ss-student-demo {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-inner, 12px);
+  border: 1px solid #e5e2dc;
+  background: #f5f2ec;
+}
+
+.ss-student-demo .ss-stage {
+  --ss-font: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif;
+  --ss-mono: 'JetBrains Mono', 'SFMono-Regular', ui-monospace, Consolas, monospace;
+  --ss-ground-radius: 12px;
+  overflow: hidden;
+}
+
+/* Cropped window frame bleeding off right and bottom edges (>= 85% stage fill) */
+.ss-student-demo .ss-stu-hero-win {
+  position: absolute;
+  top: 20px;
+  left: 22px;
+  right: -28px;
+  bottom: -26px;
+  box-shadow: var(--ss-shadow-hero);
+}
+
+.ss-student-demo .ss-stage[data-layout='compact'] .ss-stu-hero-win {
+  top: 14px;
+  left: 12px;
+  right: -18px;
+  bottom: -20px;
+}
+
+.ss-student-demo .ss-stage[data-layout='compact'] .ss-window__side {
+  display: none;
+}
+
+.ss-student-demo .ss-window__main > .ss-window__bar {
+  padding-right: 40px;
+}
+
+.ss-student-demo .ss-stage[data-layout='compact'] .ss-window__main > .ss-window__bar {
+  padding-right: 26px;
+}
+
+/* ---------------- Demo 1: Past Paper Archive ---------------- */
+
+.ss-stu-pp-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 38px 24px 18px;
+  height: 100%;
+  background: #ffffff;
+}
+
+.ss-stage[data-layout='compact'] .ss-stu-pp-page {
+  padding: 12px 24px 18px 12px;
+  gap: 10px;
+}
+
+.ss-stu-pp-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ss-stu-searchbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid #e5e2dc;
+  background: #faf9f6;
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.ss-stu-searchbox[data-active='true'],
+.ss-stu-searchbox[data-hover] {
+  border-color: var(--ss-accent);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px var(--ss-accent-soft);
+}
+
+.ss-stu-search-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ss-text-strong);
+  font-family: var(--ss-mono);
+  white-space: nowrap;
+}
+
+.ss-stu-search-placeholder {
+  font-size: 11.5px;
+  color: var(--ss-text-faint);
+  white-space: nowrap;
+}
+
+.ss-stu-caret {
+  display: inline-block;
+  width: 1.5px;
+  height: 13px;
+  background: var(--ss-accent);
+  vertical-align: middle;
+  margin-left: 1px;
+}
+
+.ss-stu-kbd {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid #e5e2dc;
+  background: #ffffff;
+  font-family: var(--ss-mono);
+  font-size: 10px;
+  color: var(--ss-text-faint);
+}
+
+.ss-stu-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ss-stu-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid #e5e2dc;
+  background: #faf9f6;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ss-text);
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 120ms ease;
+}
+
+.ss-stu-chip[data-hover] {
+  border-color: var(--ss-accent);
+  color: var(--ss-text-strong);
+}
+
+.ss-stu-chip[data-pressed] {
+  transform: scale(0.96);
+}
+
+.ss-stu-chip[data-selected='true'] {
+  border-color: var(--ss-accent);
+  background: var(--ss-accent);
+  color: #ffffff;
+}
+
+.ss-stu-paper-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ss-stu-paper-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #e5e2dc;
+  background: #faf9f6;
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.ss-stu-paper-row[data-featured='true'] {
+  background: #ffffff;
+  border-color: rgba(224, 79, 51, 0.35);
+  box-shadow: 0 2px 10px rgba(10, 10, 12, 0.04);
+}
+
+.ss-stu-paper-row--filler {
+  opacity: 0.72;
+  background: #faf9f6;
+}
+
+.ss-stu-paper-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ss-stu-paper-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ss-stu-code {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(137, 106, 189, 0.14);
+  color: #5b3b96;
+  font-family: var(--ss-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ss-stu-tag {
+  font-family: var(--ss-mono);
+  font-size: 10px;
+  color: var(--ss-text);
+}
+
+.ss-stu-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ss-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ss-stu-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ss-stu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 7px;
+  border: 1px solid #ddd8ce;
+  background: #ffffff;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ss-text-strong);
+  white-space: nowrap;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 120ms ease;
+}
+
+.ss-stu-btn--primary {
+  border-color: #0a0a0c;
+  background: #0a0a0c;
+  color: #ffffff;
+}
+
+.ss-stu-btn--success {
+  border-color: #16a34a;
+  background: #15803d;
+  color: #ffffff;
+}
+
+.ss-stu-btn[data-hover] {
+  border-color: var(--ss-accent);
+}
+
+.ss-stu-btn--primary[data-hover] {
+  background: var(--ss-accent);
+  border-color: var(--ss-accent);
+}
+
+.ss-stu-btn[data-pressed] {
+  transform: scale(0.96);
+}
+
+/* ---------------- Demo 2: Student Classroom ---------------- */
+
+.ss-stu-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px 14px;
+}
+
+.ss-stu-side-label {
+  padding: 2px 8px 4px;
+  font-family: var(--ss-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--ss-text-faint);
+}
+
+.ss-stu-course-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 9px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ss-text-strong);
+}
+
+.ss-stu-course-item[data-active='true'] {
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(10, 10, 12, 0.06);
+}
+
+.ss-stu-course-sec {
+  font-family: var(--ss-mono);
+  font-size: 9.5px;
+  color: var(--ss-text-faint);
+}
+
+.ss-stu-toolbar-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--ss-ink-1);
+}
+
+.ss-stu-tab {
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ss-text);
+  transition: background-color 150ms ease, color 150ms ease, transform 120ms ease;
+}
+
+.ss-stu-tab[data-active='true'] {
+  background: #ffffff;
+  color: var(--ss-text-strong);
+  box-shadow: 0 1px 2px rgba(10, 10, 12, 0.08);
+}
+
+.ss-stu-tab[data-hover] {
+  color: var(--ss-text-strong);
+}
+
+.ss-stu-tab[data-pressed] {
+  transform: scale(0.96);
+}
+
+.ss-stu-cr-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 36px 24px 18px;
+  height: 100%;
+  background: #ffffff;
+}
+
+.ss-stage[data-layout='compact'] .ss-stu-cr-body {
+  padding: 12px 24px 18px 12px;
+}
+
+.ss-stu-cr-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ss-stu-cr-heading {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ss-text-strong);
+}
+
+.ss-stu-role-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(137, 106, 189, 0.12);
+  color: #5b3b96;
+  font-family: var(--ss-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.ss-stu-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #e5e2dc;
+  background: #ffffff;
+}
+
+.ss-stu-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: var(--ss-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.ss-stu-status-badge--pending {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+.ss-stu-status-badge--done {
+  background: rgba(34, 197, 94, 0.14);
+  color: #15803d;
+}
+
+.ss-stu-stats-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ss-stu-stat-box {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #e5e2dc;
+  background: #faf9f6;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ss-stu-stat-label {
+  font-size: 11px;
+  color: var(--ss-text);
+  font-weight: 500;
+}
+
+.ss-stu-stat-val {
+  font-family: var(--ss-mono);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ss-text-strong);
+}
+
+.ss-stu-grade-score {
+  font-family: var(--ss-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: #15803d;
+}
+
+/* ---------------- Floating Satellite Payoff Card ---------------- */
+
+.ss-stu-sat {
+  position: absolute;
+  right: 22px;
+  bottom: 18px;
+  z-index: 40;
+  width: 268px;
+  padding: 13px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(10, 10, 12, 0.08);
+  background: rgba(255, 255, 255, 0.96);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--ss-shadow-satellite);
+  opacity: 0;
+  transform: translateY(10px) scale(0.96);
+  pointer-events: none;
+  transition:
+    opacity 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ss-stu-sat[data-show='true'] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.ss-stage[data-layout='compact'] .ss-stu-sat {
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  width: auto;
+}
+
+.ss-stu-sat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ss-stu-sat-eyebrow {
+  font-family: var(--ss-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--ss-accent-text);
+}
+
+.ss-stu-sat-badge {
+  font-family: var(--ss-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--ss-success-text);
+  background: var(--ss-success-soft);
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.ss-stu-sat-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ss-text-strong);
+  margin-bottom: 6px;
+}
+
+.ss-stu-sat-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #faf9f6;
+  border: 1px solid #efece6;
+}
+
+.ss-stu-sat-note {
+  margin-top: 7px;
+  font-size: 10.5px;
+  color: var(--ss-text);
+  line-height: 1.4;
+}

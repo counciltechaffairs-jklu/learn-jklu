@@ -2,7 +2,6 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Mail, Lock, Sparkles } from 'lucide-react';
 import JKLULogo from '@/components/layout/JKLULogo';
-import ThemeSwitcher from '@/components/layout/ThemeSwitcher';
 import AeroShards from '@/components/layout/AeroShards';
 import Topography from '@/components/layout/Topography';
 import { BackgroundBeams } from '@/components/aceternity/background-beams';
@@ -193,7 +192,6 @@ const MaintenanceMode: React.FC<MaintenanceModeProps> = ({ message }) => {
             Council of Technical Affairs
           </span>
         </div>
-        <ThemeSwitcher />
       </header>
 
       {/* Main Centered Card */}

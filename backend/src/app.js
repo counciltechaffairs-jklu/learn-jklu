@@ -15,6 +15,9 @@ import contestsRoutes from './routes/contests.js';
 import graphRoutes from './routes/graph.js';
 import facultyRoutes from './routes/faculty.js';
 import classroomRoutes from './routes/classroom.js';
+import classroomGradebookRoutes from './routes/classroomGradebook.js';
+import classroomWorkflowRoutes from './routes/classroomWorkflow.js';
+import classroomAcademyRoutes from './routes/classroomAcademy.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -22,6 +25,7 @@ app.set('trust proxy', 1);
 const FRAME_ANCESTORS = [
   "'self'",
   'https://exam-quiz-portal-lib-jklu.vercel.app',
+  'https://learnjklu.vercel.app',
   ...(IS_PRODUCTION ? [] : ['http://localhost:*', 'http://127.0.0.1:*']),
   ...Array.from(ALLOWED_ORIGINS).filter((o) => o.startsWith('https://')),
 ];
@@ -46,7 +50,6 @@ app.use(
       const normalized = origin.replace(/\/$/, '');
       if (
         ALLOWED_ORIGINS.has(normalized) ||
-        /^https:\/\/(exam-quiz-portal|paper-portal)[a-z0-9-]*\.vercel\.app$/i.test(normalized) ||
         (!IS_PRODUCTION && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized))
       ) {
         return callback(null, true);
@@ -79,6 +82,7 @@ const MAINTENANCE_BYPASS_PATHS = new Set([
   '/wake',
   '/health',
   '/maintenance-status',
+  '/admin-access/verify',
   '/captcha/challenge',
   '/admin-login',
   '/login',
@@ -118,14 +122,25 @@ app.use('/', contestsRoutes);
 app.use('/', graphRoutes);
 app.use('/', facultyRoutes);
 app.use('/', classroomRoutes);
+app.use('/', classroomGradebookRoutes);
+app.use('/', classroomWorkflowRoutes);
+app.use('/', classroomAcademyRoutes);
+
+app.use((_req, res) => {
+  res.status(404).json({ detail: 'Endpoint not found' });
+});
 
 app.use((err, _req, res, _next) => {
+  if (err && (err.type === 'entity.parse.failed' || (err instanceof SyntaxError && err.status === 400))) {
+    res.status(400).json({ detail: 'Malformed JSON request body.' });
+    return;
+  }
   if (err && err.code === 'LIMIT_FILE_SIZE') {
-    res.status(400).json({ detail: 'File size must be 500 KB or less.' });
+    res.status(400).json({ detail: 'Uploaded file exceeds the maximum allowed size limit.' });
     return;
   }
   console.error('[Unhandled Server Error]', err);
-  res.status(500).json({ detail: 'Error' });
+  res.status(500).json({ detail: 'Internal server error' });
 });
 
 export default app;

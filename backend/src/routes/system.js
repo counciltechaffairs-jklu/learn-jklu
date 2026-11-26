@@ -2,13 +2,17 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { getDb, getLocalPastpaperCatalog } from '../config/db.js';
 import { getOrSetCache, getCacheMetrics } from '../config/cache.js';
-import { STORAGE_USERS_DIR, STORAGE_PAPERS_DIR } from '../config/env.js';
+import { STORAGE_USERS_DIR, STORAGE_PAPERS_DIR, isValidAdminSecretSlug } from '../config/env.js';
 import {
   getAuthenticatedUser,
   canVerifyStudentIds,
   canAccessAdminPanel,
 } from '../middleware/auth.js';
-import { getRequestStats, previewDownloadLimiter } from '../middleware/rateLimiters.js';
+import {
+  getRequestStats,
+  previewDownloadLimiter,
+  adminSecretVerifyLimiter,
+} from '../middleware/rateLimiters.js';
 import { streamPdfWithByteRange } from '../utils/pdfStorage.js';
 import { canAccessPaper } from '../utils/paperHelpers.js';
 import { getMaintenanceStatus } from '../utils/maintenance.js';
@@ -43,18 +47,29 @@ router.get('/maintenance-status', async (_req, res) => {
   res.json(status);
 });
 
+router.post('/admin-access/verify', adminSecretVerifyLimiter, (req, res) => {
+  const slug = String(req.body?.slug || '').trim();
+  const valid = isValidAdminSecretSlug(slug);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ valid });
+});
+
 router.get('/health', async (_req, res) => {
-  const db = await getDb();
-  const { activeRequests, totalRequestsHandled } = getRequestStats();
-  res.json({
-    status: 'healthy',
-    database: db.engineName,
-    activeRequests,
-    totalRequestsHandled,
-    cache: getCacheMetrics(),
-    memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
-    uptimeSeconds: Math.round(process.uptime()),
-  });
+  try {
+    const db = await getDb();
+    await db.query('SELECT 1');
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      status: 'healthy',
+      database: 'connected',
+    });
+  } catch {
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(503).json({
+      status: 'unhealthy',
+      database: 'disconnected',
+    });
+  }
 });
 
 router.get('/metrics', async (req, res) => {

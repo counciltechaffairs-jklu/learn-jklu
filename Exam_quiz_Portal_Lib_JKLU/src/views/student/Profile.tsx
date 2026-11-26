@@ -21,9 +21,24 @@ import {
   ExternalLink,
   ShieldCheck,
   Building2,
+  Camera,
+  Trash2,
+  Palette,
 } from 'lucide-react';
+import {
+  FacultyCardDesignPicker,
+  FacultyCardPatternArt,
+  resolveFacultyCardStyle,
+  type FacultyCardStyleId,
+} from '@/components/faculty/facultyCardStyles';
+import { FacultyPhotoCropModal } from '@/components/faculty/FacultyPhotoCropModal';
+import {
+  FacultyPhotoLightbox,
+  type LightboxPhotoData,
+} from '@/components/faculty/FacultyPhotoLightbox';
 import { sanitizeErrorMessage } from '@/utils/errorSanitizer';
 import { API } from '@/utils/api';
+import { classroomApi } from '@/utils/classroomApi';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import Toast from '@/components/ui/Toast';
@@ -153,15 +168,25 @@ const Profile: React.FC = () => {
   const [idCardBlobUrl, setIdCardBlobUrl] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [extra, setExtra] = useState({
+    name: '',
     rollno: '',
     studentId: '',
+    department: 'B.TECH',
+    semester: '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [pwdForm, setPwdForm] = useState({ current: '', next: '', confirm: '' });
+  const [changingPwd, setChangingPwd] = useState(false);
 
   // Faculty profile state
   const [facultyForm, setFacultyForm] = useState<FacultyFormState>(EMPTY_FACULTY_FORM);
   const [initialFacultyForm, setInitialFacultyForm] = useState<FacultyFormState>(EMPTY_FACULTY_FORM);
   const [taughtCourses, setTaughtCourses] = useState<TaughtCourse[]>([]);
+  const [facultyPhoto, setFacultyPhoto] = useState<string | null>(null);
+  const [facultyCardStyle, setFacultyCardStyle] = useState<FacultyCardStyleId>('constellation');
+  const [cropPhotoFile, setCropPhotoFile] = useState<File | null>(null);
+  const [lightboxPhoto, setLightboxPhoto] = useState<LightboxPhotoData | null>(null);
+  const [savingStyle, setSavingStyle] = useState(false);
 
   const [toast, setToast] = useState({
     show: false,
@@ -197,10 +222,14 @@ const Profile: React.FC = () => {
         const res = await API.getCurrentUser();
         if (!active) return;
         const data = res.data as Me;
+        const parsedSem = String(data.year || '').match(/(\d+)/)?.[1] || '';
         setMe(data);
         setExtra({
+          name: data.name || '',
           rollno: data.roll_no || '',
           studentId: data.student_id || '',
+          department: data.department || 'B.TECH',
+          semester: parsedSem,
         });
 
         const profRole = Boolean(
@@ -217,13 +246,16 @@ const Profile: React.FC = () => {
           .catch(() => {});
 
         if (profRole) {
-          const [profRes, coursesRes] = await Promise.all([
+          const [profRes, coursesData] = await Promise.all([
             API.client.get('/faculty/me/profile'),
-            API.client.get('/classroom/offerings'),
+            classroomApi.listOfferings(),
           ]);
+          const coursesRes = { data: coursesData };
           if (!active) return;
 
           const p = profRes.data || {};
+          setFacultyPhoto(p.photo_path || null);
+          setFacultyCardStyle(resolveFacultyCardStyle(p.card_style).id);
           const populated: FacultyFormState = {
             name: p.name || data.name || '',
             designation: p.designation || 'Assistant Professor',
@@ -241,7 +273,7 @@ const Profile: React.FC = () => {
           setFacultyForm(populated);
           setInitialFacultyForm(populated);
 
-          const items: TaughtCourse[] = (coursesRes.data?.items || []).filter(
+          const items: TaughtCourse[] = ((coursesRes.data?.items || []) as any[]).filter(
             (item: TaughtCourse) => Boolean(item.is_instructor)
           );
           setTaughtCourses(items);
@@ -329,8 +361,11 @@ const Profile: React.FC = () => {
       let updated: Me;
 
       await API.updateProfile({
-        roll_no: extra.rollno || undefined,
-        student_id: extra.studentId || undefined,
+        name: extra.name.trim() || undefined,
+        roll_no: extra.rollno.trim() || undefined,
+        student_id: extra.studentId.trim() || undefined,
+        department: extra.department.trim() || undefined,
+        semester: extra.semester ? Number(extra.semester) : undefined,
       });
 
       if (idFile) {
@@ -342,10 +377,14 @@ const Profile: React.FC = () => {
       }
 
       localStorage.setItem('idVerified', updated.id_verified ? 'yes' : 'no');
+      const updatedSem = String(updated.year || '').match(/(\d+)/)?.[1] || '';
       setMe(updated);
       setExtra({
+        name: updated.name || '',
         rollno: updated.roll_no || '',
         studentId: updated.student_id || '',
+        department: updated.department || 'B.TECH',
+        semester: updatedSem,
       });
       setIdFile(null);
       setErrors({});
@@ -359,11 +398,11 @@ const Profile: React.FC = () => {
         'success'
       );
     } catch (err: any) {
-      const status = err?.response?.status;
+      const status = err?.status ?? err?.response?.status;
       const msg =
-        !err?.response || (status !== undefined && status >= 500)
+        (status !== undefined && status >= 500)
           ? 'Error'
-          : sanitizeErrorMessage(err?.response?.data?.detail, 'Error');
+          : sanitizeErrorMessage(err?.response?.data?.detail ?? err?.message, 'Error');
       showToast(msg, 'error');
     } finally {
       setSaving(false);
@@ -404,12 +443,41 @@ const Profile: React.FC = () => {
     setIsEditing(false);
     setErrors({});
     if (me) {
+      const parsedSem = String(me.year || '').match(/(\d+)/)?.[1] || '';
       setExtra({
+        name: me.name || '',
         rollno: me.roll_no || '',
         studentId: me.student_id || '',
+        department: me.department || 'B.TECH',
+        semester: parsedSem,
       });
     }
     setIdFile(null);
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pwdForm.current || pwdForm.next.length < 8) {
+      showToast('New password must be at least 8 characters', 'error');
+      return;
+    }
+    if (pwdForm.next !== pwdForm.confirm) {
+      showToast('New password and confirm password do not match', 'error');
+      return;
+    }
+    setChangingPwd(true);
+    try {
+      const res = await API.changePassword(pwdForm.current, pwdForm.next);
+      if (res.data?.access_token && typeof window !== 'undefined') {
+        localStorage.setItem('token', res.data.access_token);
+      }
+      setPwdForm({ current: '', next: '', confirm: '' });
+      showToast('Password updated successfully!', 'success');
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || err?.message || 'Failed to change password', 'error');
+    } finally {
+      setChangingPwd(false);
+    }
   };
 
   const inputClass = (hasError?: boolean) =>
@@ -431,6 +499,44 @@ const Profile: React.FC = () => {
 
   const hasFacultyChanges =
     JSON.stringify(facultyForm) !== JSON.stringify(initialFacultyForm);
+
+  const activeFacultyCardStyle = resolveFacultyCardStyle(facultyCardStyle);
+
+  const handleSaveCroppedFacultyPhoto = async (dataUrl: string, sizeKb: number) => {
+    const res = await API.client.patch('/faculty/me/photo', {
+      photo_data_url: dataUrl,
+    });
+    const saved = res.data?.photo_path || dataUrl;
+    setFacultyPhoto(saved);
+    setCropPhotoFile(null);
+    showToast(`Faculty photo converted to WebP (${sizeKb} KB) & published!`, 'success');
+  };
+
+  const handleRemoveMyFacultyPhoto = async () => {
+    try {
+      await API.client.patch('/faculty/me/photo', { photo_data_url: null });
+      setFacultyPhoto(null);
+      showToast('Faculty photo removed', 'info');
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || err?.message || 'Could not remove photo', 'error');
+    }
+  };
+
+  const handleSelectMyCardStyle = async (styleId: FacultyCardStyleId) => {
+    setSavingStyle(true);
+    try {
+      const res = await API.client.patch('/faculty/me/card-style', { card_style: styleId });
+      setFacultyCardStyle(resolveFacultyCardStyle(res.data?.card_style || styleId).id);
+      showToast('Faculty card design updated — live on Faculty Directory!', 'success');
+    } catch (err: any) {
+      showToast(
+        err?.response?.data?.detail || err?.message || 'Could not update card design',
+        'error'
+      );
+    } finally {
+      setSavingStyle(false);
+    }
+  };
 
   return (
     <div className="relative min-h-screen flex flex-col bg-transparent text-[#0A0A0C] dark:text-[#F5F4F0] selection:bg-[#E04F33] selection:text-white overflow-x-hidden pt-[env(safe-area-inset-top)]">
@@ -499,25 +605,103 @@ const Profile: React.FC = () => {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               {/* Left Column: Live Directory Card Preview + Active Courses Taught */}
               <div className="lg:col-span-4 space-y-5 lg:sticky lg:top-24">
-                <section className="rounded-2xl border border-[#E5E2DC]/90 dark:border-white/10 bg-white/90 dark:bg-[#111117]/85 backdrop-blur-md p-5 sm:p-6 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.3)] space-y-4">
-                  <div className="flex items-start gap-3.5">
-                    <div className="w-12 h-12 rounded-xl bg-[#0A0A0C] dark:bg-[#F5F4F0] text-[#FAF9F6] dark:text-[#0A0A0C] font-mono-tabular font-semibold text-sm flex items-center justify-center shrink-0">
-                      {getMonogram(facultyForm.name || me?.name)}
+                <section className="relative overflow-hidden rounded-2xl border border-[#DDD8CE] bg-white p-5 sm:p-6 shadow-[0_6px_26px_rgba(10,10,12,0.04)] space-y-4">
+                  {/* Live Top-Right Vector Design Preview */}
+                  <FacultyCardPatternArt
+                    styleId={activeFacultyCardStyle.id}
+                    accent={activeFacultyCardStyle.accentHex}
+                    secondary={activeFacultyCardStyle.secondaryHex}
+                  />
+
+                  <div className="relative z-10 flex items-start gap-3.5">
+                    <div className="relative shrink-0">
+                      {facultyPhoto ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLightboxPhoto({
+                              src: facultyPhoto,
+                              name: facultyForm.name || me?.name || 'Faculty',
+                              designation: facultyForm.designation,
+                              school: facultyForm.school,
+                            })
+                          }
+                          title="Click to enlarge photo"
+                          aria-label="Enlarge faculty photo"
+                          className={`group/photo block w-16 h-16 rounded-2xl overflow-hidden ring-4 ${activeFacultyCardStyle.ringClass} hover:ring-[#E04F33]/50 shadow-sm cursor-zoom-in transition-[box-shadow,transform] duration-150 active:scale-[0.97]`}
+                        >
+                          <img
+                            src={facultyPhoto}
+                            alt={facultyForm.name || me?.name || 'Faculty'}
+                            className="w-full h-full object-cover group-hover/photo:scale-105 transition-transform duration-300"
+                          />
+                        </button>
+                      ) : (
+                        <div
+                          className={`w-16 h-16 rounded-2xl overflow-hidden ring-4 ${activeFacultyCardStyle.ringClass} ${activeFacultyCardStyle.avatarBg} text-white font-mono-tabular font-bold text-base flex items-center justify-center shadow-sm`}
+                        >
+                          {getMonogram(facultyForm.name || me?.name)}
+                        </div>
+                      )}
+                      <label
+                        title="Upload & crop faculty photo (WebP)"
+                        className="absolute -bottom-1.5 -right-1.5 w-6 h-6 rounded-full bg-[#E04F33] hover:bg-[#0A0A0C] text-white flex items-center justify-center shadow-md ring-2 ring-white cursor-pointer transition-colors"
+                      >
+                        <Camera className="w-3 h-3" />
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) setCropPhotoFile(f);
+                            e.currentTarget.value = '';
+                          }}
+                        />
+                      </label>
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <h2 className="text-base font-semibold tracking-tight truncate">
+                        <h2 className="text-base font-bold tracking-tight truncate text-[#0A0A0C]">
                           {facultyForm.name || me?.name}
                         </h2>
                         {facultyForm.school && (
-                          <span className="px-2 py-0.5 rounded font-mono-tabular text-[10px] uppercase bg-black/[0.05] dark:bg-white/[0.08] text-[#5C5B57] dark:text-[#C4C3BE]">
+                          <span
+                            className={`px-2 py-0.5 rounded-full border font-mono-tabular text-[10px] font-semibold uppercase ${activeFacultyCardStyle.badgeClass}`}
+                          >
                             {facultyForm.school}
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-[#5C5B57] dark:text-[#A09F9A] mt-0.5">
+                      <p className="text-xs text-[#353430] mt-0.5">
                         {facultyForm.designation}
                       </p>
+                      <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                        <label className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[#DDD8CE] bg-[#FAF9F6] hover:border-[#E04F33] hover:text-[#E04F33] text-[11px] font-semibold text-[#0A0A0C] cursor-pointer transition-colors">
+                          <Camera className="w-3 h-3" />
+                          <span>{facultyPhoto ? 'Change Photo' : 'Upload Photo'}</span>
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) setCropPhotoFile(f);
+                              e.currentTarget.value = '';
+                            }}
+                          />
+                        </label>
+                        {facultyPhoto && (
+                          <button
+                            type="button"
+                            onClick={handleRemoveMyFacultyPhoto}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-[11px] font-semibold text-rose-700 transition-colors"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Remove</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -578,7 +762,7 @@ const Profile: React.FC = () => {
                   )}
 
                   <p className="text-[11px] text-[#5C5B57] dark:text-[#8E8D88] pt-2 border-t border-[#E5E2DC]/70 dark:border-white/10 leading-relaxed">
-                    Public academic details appear on the Faculty &amp; TA Directory and inside your course classrooms.
+                    Public academic details appear on the Faculty Directory and inside your course classrooms.
                   </p>
                 </section>
 
@@ -805,6 +989,27 @@ const Profile: React.FC = () => {
                       onChange={(e) => setFacultyForm({ ...facultyForm, bio: e.target.value })}
                       placeholder="Brief overview of courses taught and academic focus..."
                       className={inputClass()}
+                    />
+                  </div>
+
+                  {/* Visual Faculty Card Design Selector (Live Sample Previews) */}
+                  <div className="pt-3 border-t border-[#E5E2DC] space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <Palette className="w-4 h-4 text-[#896ABD]" />
+                        <span className="text-xs font-bold text-[#0A0A0C]">
+                          Faculty Card Design (Live Samples)
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-[#353430]">
+                        Updates your public card on Faculty Directory immediately
+                      </span>
+                    </div>
+                    <FacultyCardDesignPicker
+                      selectedStyle={facultyCardStyle}
+                      onSelect={handleSelectMyCardStyle}
+                      disabled={savingStyle}
+                      monogram={getMonogram(facultyForm.name || me?.name)}
                     />
                   </div>
                 </section>
@@ -1073,6 +1278,49 @@ const Profile: React.FC = () => {
                       </div>
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="space-y-1.5 sm:col-span-2">
+                          <label className="block text-xs font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">
+                            Full Name *
+                          </label>
+                          <input
+                            value={extra.name}
+                            onChange={(e) => setExtra({ ...extra, name: e.target.value })}
+                            required
+                            className={inputClass()}
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="block text-xs font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">
+                            Department / Programme
+                          </label>
+                          <select
+                            value={extra.department}
+                            onChange={(e) => setExtra({ ...extra, department: e.target.value })}
+                            className={inputClass()}
+                          >
+                            <option value="B.TECH">B.TECH</option>
+                            <option value="BBA">BBA</option>
+                            <option value="BCA">BCA</option>
+                            <option value="B.DES">B.DES</option>
+                            <option value="M.TECH">M.TECH</option>
+                            <option value="MBA">MBA</option>
+                            <option value="PHD">PHD</option>
+                          </select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="block text-xs font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">
+                            Semester (1–10)
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={10}
+                            placeholder="e.g. 3"
+                            value={extra.semester}
+                            onChange={(e) => setExtra({ ...extra, semester: e.target.value })}
+                            className={inputClass()}
+                          />
+                        </div>
                         <div className="space-y-1.5">
                           <label className="block text-xs font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">
                             Roll Number *
@@ -1133,6 +1381,14 @@ const Profile: React.FC = () => {
                           <p className="text-sm font-semibold break-all">{me.email}</p>
                         </div>
                       </div>
+                      <div className="p-3.5 rounded-xl bg-[#FAF9F6] dark:bg-[#0A0A0C]/70 border border-[#E5E2DC] dark:border-white/10">
+                        <p className="text-[11px] font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">Department</p>
+                        <p className="text-sm font-semibold mt-0.5">{me.department || 'B.TECH'}</p>
+                      </div>
+                      <div className="p-3.5 rounded-xl bg-[#FAF9F6] dark:bg-[#0A0A0C]/70 border border-[#E5E2DC] dark:border-white/10">
+                        <p className="text-[11px] font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">Semester / Year</p>
+                        <p className="text-sm font-semibold mt-0.5">{me.year || '—'}</p>
+                      </div>
                       {extra.rollno && (
                         <div className="p-3.5 rounded-xl bg-[#FAF9F6] dark:bg-[#0A0A0C]/70 border border-[#E5E2DC] dark:border-white/10">
                           <p className="text-[11px] font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">Roll Number</p>
@@ -1185,11 +1441,24 @@ const Profile: React.FC = () => {
                     <Mail className="w-4 h-4 text-[#896ABD] shrink-0" />
                     <span className="break-all text-xs sm:text-sm">{me.email}</span>
                   </div>
-                  <div className="p-3 rounded-xl bg-[#FAF9F6] dark:bg-[#0A0A0C]/70 border border-[#E5E2DC] dark:border-white/10 flex items-center gap-2.5">
-                    <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
-                    <span className="text-xs sm:text-sm font-medium">
-                      ID verification: <span className="text-amber-600 dark:text-amber-400">Not verified</span>
-                    </span>
+                  <div className="p-3 rounded-xl bg-[#FAF9F6] dark:bg-[#0A0A0C]/70 border border-[#E5E2DC] dark:border-white/10 flex items-center justify-between gap-2.5 flex-wrap">
+                    <div className="flex items-center gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span className="text-xs sm:text-sm font-medium">ID verification</span>
+                    </div>
+                    {me.id_card_path && !me.admin_feedback ? (
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+                        Pending Admin Review
+                      </span>
+                    ) : me.admin_feedback ? (
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-300">
+                        Rejected · Resubmit ID
+                      </span>
+                    ) : (
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                        Not Verified
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -1201,6 +1470,14 @@ const Profile: React.FC = () => {
                 )}
 
                 <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="p-3 rounded-xl bg-[#FAF9F6] dark:bg-[#0A0A0C]/70 border border-[#E5E2DC] dark:border-white/10">
+                    <span className="text-[10px] font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E] block">Department</span>
+                    <span className="font-semibold">{me.department || 'B.TECH'}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-[#FAF9F6] dark:bg-[#0A0A0C]/70 border border-[#E5E2DC] dark:border-white/10">
+                    <span className="text-[10px] font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E] block">Semester / Year</span>
+                    <span className="font-semibold">{me.year || '-'}</span>
+                  </div>
                   <div className="p-3 rounded-xl bg-[#FAF9F6] dark:bg-[#0A0A0C]/70 border border-[#E5E2DC] dark:border-white/10">
                     <span className="text-[10px] font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E] block">Roll No</span>
                     <span className="font-semibold">{extra.rollno || '-'}</span>
@@ -1244,6 +1521,49 @@ const Profile: React.FC = () => {
                 )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <label className="block text-xs font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">
+                      Full Name *
+                    </label>
+                    <input
+                      value={extra.name}
+                      onChange={(e) => setExtra({ ...extra, name: e.target.value })}
+                      required
+                      className={inputClass()}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">
+                      Department
+                    </label>
+                    <select
+                      value={extra.department}
+                      onChange={(e) => setExtra({ ...extra, department: e.target.value })}
+                      className={inputClass()}
+                    >
+                      <option value="B.TECH">B.TECH</option>
+                      <option value="BBA">BBA</option>
+                      <option value="BCA">BCA</option>
+                      <option value="B.DES">B.DES</option>
+                      <option value="M.TECH">M.TECH</option>
+                      <option value="MBA">MBA</option>
+                      <option value="PHD">PHD</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">
+                      Semester (1–10)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      placeholder="e.g. 3"
+                      value={extra.semester}
+                      onChange={(e) => setExtra({ ...extra, semester: e.target.value })}
+                      className={inputClass()}
+                    />
+                  </div>
                   <div className="space-y-1.5">
                     <label className="block text-xs font-mono-tabular uppercase text-[#5C5B57] dark:text-[#94938E]">
                       Roll Number *
@@ -1382,7 +1702,85 @@ const Profile: React.FC = () => {
             </div>
           </motion.section>
         )}
+
+        {!loading && me && (
+          <section className="mt-6 rounded-2xl border border-[#E5E2DC]/90 bg-white/95 backdrop-blur-md p-5 sm:p-6 shadow-sm space-y-4">
+            <div className="flex items-center justify-between gap-2 pb-3 border-b border-[#E5E2DC]/70">
+              <div className="flex items-center gap-2.5">
+                <Lock className="w-4 h-4 text-[#E04F33]" />
+                <div>
+                  <h2 className="text-base font-semibold tracking-tight text-[#0A0A0C]">
+                    Account Security · Change Password
+                  </h2>
+                  <p className="text-xs text-[#5C5B57]">
+                    Minimum 8 characters. Updating your password revokes other signed-in sessions.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <form onSubmit={handleChangePassword} className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+              <div className="space-y-1">
+                <label className="block text-[11px] font-mono-tabular uppercase text-[#5C5B57]">
+                  Current Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={pwdForm.current}
+                  onChange={(e) => setPwdForm({ ...pwdForm, current: e.target.value })}
+                  className={inputClass()}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[11px] font-mono-tabular uppercase text-[#5C5B57]">
+                  New Password (8+ chars)
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={pwdForm.next}
+                  onChange={(e) => setPwdForm({ ...pwdForm, next: e.target.value })}
+                  className={inputClass()}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[11px] font-mono-tabular uppercase text-[#5C5B57]">
+                  Confirm New Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={pwdForm.confirm}
+                  onChange={(e) => setPwdForm({ ...pwdForm, confirm: e.target.value })}
+                  className={inputClass()}
+                />
+              </div>
+              <div className="sm:col-span-3 flex justify-end pt-1">
+                <button
+                  type="submit"
+                  disabled={changingPwd}
+                  className="px-5 py-2.5 rounded-xl bg-[#0A0A0C] hover:bg-[#E04F33] text-white text-xs font-semibold transition-colors disabled:opacity-50"
+                >
+                  {changingPwd ? 'Updating Password...' : 'Update Password'}
+                </button>
+              </div>
+            </form>
+          </section>
+        )}
       </main>
+
+      <FacultyPhotoLightbox
+        photo={lightboxPhoto}
+        onClose={() => setLightboxPhoto(null)}
+      />
+
+      <FacultyPhotoCropModal
+        file={cropPhotoFile}
+        onCancel={() => setCropPhotoFile(null)}
+        onSave={handleSaveCroppedFacultyPhoto}
+      />
 
       <Footer />
     </div>

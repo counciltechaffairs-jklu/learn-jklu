@@ -2,13 +2,17 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, Shield, ArrowLeft } from 'lucide-react';
 import { API } from '@/utils/api';
-import { useTheme } from '@/contexts/ThemeContext';
-import ThemeSwitcher from '@/components/layout/ThemeSwitcher';
+import { setStoredAdminSecretSlug } from '@/utils/postLoginRedirect';
 import JKLULogo from '@/components/layout/JKLULogo';
 import RobotCheck, { type CaptchaPayload } from '@/components/auth/RobotCheck';
 import CrystalizedBall from '@/components/layout/CrystalizedBall';
+import { DimensionalCornerMarks } from '@/components/dimensional/DimensionalKit';
 
-const AdminLogin: React.FC = () => {
+interface AdminLoginProps {
+  secretSlug?: string;
+}
+
+const AdminLogin: React.FC<AdminLoginProps> = ({ secretSlug }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -16,7 +20,6 @@ const AdminLogin: React.FC = () => {
   const [captchaResetKey, setCaptchaResetKey] = useState(0);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { theme } = useTheme();
   const navigate = useNavigate();
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -35,15 +38,20 @@ const AdminLogin: React.FC = () => {
       API.clearCache();
 
       const user = response.data.user || (await API.getCurrentUser()).data;
+      const activeSlug =
+        secretSlug ||
+        sessionStorage.getItem('admin_secret_slug') ||
+        localStorage.getItem('admin_secret_slug') ||
+        '';
+      if (activeSlug) {
+        setStoredAdminSecretSlug(activeSlug);
+      }
+      const adminBase = activeSlug ? `/${activeSlug}` : '/home';
 
       if (user.admin_role === 'professor') {
         window.location.href = '/classroom';
-      } else if (user.admin_role === 'coding_ta') {
-        window.location.href = '/admin/coding-hour';
-      } else if (user.is_sub_admin) {
-        window.location.href = '/admin/contests';
       } else {
-        window.location.href = '/admin';
+        window.location.href = adminBase;
       }
     } catch (err: any) {
       setError(err.message || 'Invalid admin credentials');
@@ -59,7 +67,7 @@ const AdminLogin: React.FC = () => {
         <CrystalizedBall
           preset="plasma"
           color="#F25BD0"
-          theme={theme === 'dark' ? 'dark' : 'light'}
+          theme="light"
           size={0.7}
           crackle={0.85}
           fill={0.5}
@@ -94,10 +102,14 @@ const AdminLogin: React.FC = () => {
             <span>Back to Papers</span>
           </button>
         </div>
-        <ThemeSwitcher />
       </div>
 
-      <div className="relative z-10 max-w-md w-full mx-auto backdrop-blur-md bg-white/90 dark:bg-[#111117]/85 border border-[#E5E2DC] dark:border-[#232329] shadow-xl rounded-lg p-5 sm:p-8 space-y-6">
+      <div className="relative z-10 modal-panel-enter max-w-md w-full mx-auto backdrop-blur-md bg-white/95 dark:bg-[#111117]/90 border border-[#E5E2DC] dark:border-[#232329] shadow-[var(--shadow-elevated)] rounded-2xl p-5 sm:p-8 space-y-6">
+        <DimensionalCornerMarks />
+        <div className="flex items-center justify-between text-[9.5px] font-mono-tabular uppercase tracking-wider text-[#5C5B57] dark:text-[#8E8D88] border-b border-[#E5E2DC]/80 dark:border-white/10 pb-2">
+          <span>DWG NO. JKLU-AUTH-03</span>
+          <span>REV 2.0 · SCALE 1:1</span>
+        </div>
         <div className="space-y-2">
           <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-[#E04F33]/10 text-[#E04F33] text-xs font-mono-tabular">
             <Shield className="w-3.5 h-3.5" />
@@ -170,10 +182,13 @@ const AdminLogin: React.FC = () => {
           </button>
         </form>
 
-        <div className="pt-3 border-t border-[#E5E2DC] dark:border-[#232329] text-center">
-          <Link to="/login" className="text-xs text-[#5C5B57] hover:underline">
+        <div className="pt-3 border-t border-[#E5E2DC] dark:border-[#232329] text-center space-y-2">
+          <Link to="/login" className="text-xs text-[#5C5B57] hover:underline block">
             Switch to Student Sign In →
           </Link>
+          <div className="font-mono-tabular text-[9.5px] uppercase tracking-wider text-[#5C5B57] dark:text-[#8E8D88]">
+            SCALE 1:1 · @JKLU.EDU.IN
+          </div>
         </div>
       </div>
 
